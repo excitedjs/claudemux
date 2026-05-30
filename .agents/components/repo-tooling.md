@@ -89,6 +89,14 @@ misleading error each time (`E404` / `ENEEDAUTH` / `E422`):
 The symptom → cause → fix for each, with the failing run that revealed it, is in
 [decision npm-oidc-trusted-publishing](/.agents/decisions/npm-oidc-trusted-publishing.md).
 
+After a release, the bot commits and pushes the version bump with a GitHub App
+token, and that commit message carries `[skip ci]`. The marker keeps the push
+from starting a redundant second round of `ci` + `gitleaks` + this release
+workflow: an App-token push otherwise re-triggers every `push`-based workflow,
+yet the bump only changes the version and changelog and publishing already ran
+in the same run as the bump. See
+[decision changeset-release-versioning](/.agents/decisions/changeset-release-versioning.md).
+
 ## Local hooks
 
 The repo uses Husky (`/.husky/`) for local git hooks, installed automatically
