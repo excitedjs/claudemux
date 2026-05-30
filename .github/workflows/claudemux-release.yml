@@ -37,6 +37,8 @@ env:
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # commit + push the version bump; no id-token needed
     outputs:
       did_release: ${{ steps.release.outputs.did_release }}
     steps:
