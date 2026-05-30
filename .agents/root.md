@@ -83,7 +83,8 @@ heart of the system; see [the cross-process protocol](/.agents/domains/cross-pro
 
 **Decisions** — why the system is shaped the way it is:
 
-- [decisions/README.md](/.agents/decisions/README.md) — index of decision records and how to add one.
+- **Start here for the design intent.** [dispatcher-teammate-model](/.agents/decisions/dispatcher-teammate-model.md) is the foundational record — *why* claudemux is a dispatcher orchestrating per-repo `tmux` teammates rather than using Agent Teams. The other load-bearing *why*s: [node-cli-orchestrator](/.agents/decisions/node-cli-orchestrator.md) (why a Node CLI, not a resident MCP core), [zero-install-type-stripping](/.agents/decisions/zero-install-type-stripping.md) (why zero-dependency, `ws` vendored), [hook-driven-busy-idle-signal](/.agents/decisions/hook-driven-busy-idle-signal.md) (why the turn signal is hook-driven), and [atomic-tm-verbs](/.agents/decisions/atomic-tm-verbs.md) (why the verb contract is shaped this way).
+- [decisions/README.md](/.agents/decisions/README.md) — the full register of decision records (browsable **by theme** and alphabetically) and how to add one.
 
 **Research archive** — the investigation behind the decisions:
 

@@ -5,6 +5,54 @@ system's shape. Each record captures one design choice: the situation that
 forced it, the choice made, and what the choice now costs or constrains. A
 future agent reads these to avoid re-litigating a settled question.
 
+## Browse by theme
+
+A discovery layer grouped by topic. The [Index below](#index) is the
+canonical, `check.sh`-enforced register (every record, alphabetical, with
+status); these groups just make a topic easier to find. *(superseded)* marks a
+record kept for history — open it and follow its Status link to the current one.
+
+**Foundational & orchestration model**
+- [dispatcher-teammate-model](/.agents/decisions/dispatcher-teammate-model.md) — the dispatcher + per-repo `tmux` teammate model (the architecture origins)
+- [node-cli-orchestrator](/.agents/decisions/node-cli-orchestrator.md) — the 1.0 line is a pure Node `tm` CLI, not a resident MCP core
+- [multi-engine-tui-architecture](/.agents/decisions/multi-engine-tui-architecture.md) — the `Engine` interface reshape so a new engine/TUI slots in
+- [mcp-native-orchestration-core](/.agents/decisions/mcp-native-orchestration-core.md) — *(superseded)* the original resident MCP-native core
+
+**Runtime & packaging**
+- [zero-install-type-stripping](/.agents/decisions/zero-install-type-stripping.md) — run TypeScript directly, vendor `ws`, zero install
+- [node-cli-committed-bundle](/.agents/decisions/node-cli-committed-bundle.md) — *(superseded)* the committed esbuild bundle
+
+**`tm` verbs, cross-process protocol & teammate lifecycle**
+- [atomic-tm-verbs](/.agents/decisions/atomic-tm-verbs.md) — atomic round-trip verbs with a stdout/stderr split
+- [cross-process-cross-platform-invariants](/.agents/decisions/cross-process-cross-platform-invariants.md) — path-builder + cross-platform invariants (promoted into `CLAUDE.md`)
+- [hook-driven-busy-idle-signal](/.agents/decisions/hook-driven-busy-idle-signal.md) — BUSY/idle from hooks, not pane scraping
+- [teammates-launch-without-askuserquestion](/.agents/decisions/teammates-launch-without-askuserquestion.md) — teammates launch with `AskUserQuestion` disabled
+- [worktree-default-and-name-repo-decoupling](/.agents/decisions/worktree-default-and-name-repo-decoupling.md) — worktree-by-default; teammate `name` decoupled from the repo path
+
+**Codex engine**
+- [codex-driver](/.agents/decisions/codex-driver.md) — the Codex teammate driver (vendored protocol, FS supervision, ask-mode borrow)
+- [codex-engine-flag](/.agents/decisions/codex-engine-flag.md) — *(superseded)* the `tm spawn --engine` flag
+
+**Feishu channel**
+- [feishu-channel-plugin](/.agents/decisions/feishu-channel-plugin.md) — a separate TypeScript plugin shipped from this repo
+- [feishu-channel-event-registry](/.agents/decisions/feishu-channel-event-registry.md) — an extensible per-event handler registry
+- [feishu-channel-group-pairing](/.agents/decisions/feishu-channel-group-pairing.md) — group authorization by @-mention pairing
+- [feishu-channel-group-policy-modes](/.agents/decisions/feishu-channel-group-policy-modes.md) — the three-mode `groupPolicy` switch
+- [feishu-channel-launch-without-session-proxy](/.agents/decisions/feishu-channel-launch-without-session-proxy.md) — the MCP server launched with the session proxy cleared
+- [feishu-channel-orphan-detection-by-stdin-eof](/.agents/decisions/feishu-channel-orphan-detection-by-stdin-eof.md) — exited-parent detection by stdin EOF
+- [feishu-channel-received-reaction-indicator](/.agents/decisions/feishu-channel-received-reaction-indicator.md) — the received-reaction indicator on inbound messages
+- [feishu-doc-comment-enrichment](/.agents/decisions/feishu-doc-comment-enrichment.md) — SDK decode + fetched text/title enrichment
+- [feishu-doc-comment-fetch-via-batch-query](/.agents/decisions/feishu-doc-comment-fetch-via-batch-query.md) — comment text via `fileComment.batchQuery`
+- [feishu-worker-scoped-subscription](/.agents/decisions/feishu-worker-scoped-subscription.md) — Worker-scoped subscription via a co-hosted holder
+
+**Release, quality & testing**
+- [changeset-release-versioning](/.agents/decisions/changeset-release-versioning.md) — versioning via changeset fragments consumed by a release step
+- [tm-quality-hardening](/.agents/decisions/tm-quality-hardening.md) — CI, bats tests, lint, shared path/encoding helpers
+- [live-teammate-integration-harness](/.agents/decisions/live-teammate-integration-harness.md) — live-teammate integration tests + directory-trust seeding
+
+**Knowledge-base process**
+- [research-hazard-dispositions](/.agents/decisions/research-hazard-dispositions.md) — every research hazard reaches a recorded disposition
+
 ## Index
 
 Records are listed alphabetically by topic slug. There is no numbering — the
@@ -64,8 +112,10 @@ on the first run of `scripts/check.sh`:
 3. Create `.agents/decisions/<topic-slug>.md` from the skeleton below and
    fill it in.
 4. Insert a row into the `## Index` table above, keeping the table
-   alphabetically sorted by slug. The link target is
-   `/.agents/decisions/<topic-slug>.md`.
+   alphabetically sorted by slug (link target
+   `/.agents/decisions/<topic-slug>.md`), and slot the record into the matching
+   group under `## Browse by theme`. The Index is the canonical,
+   `check.sh`-enforced register; the theme groups are a discovery aid.
 5. If the new record supersedes an existing one, edit the superseded
    record's `**Status:**` line to point at the new file. The link to the
    real file is mandatory so a future agent does not have to grep for it:
