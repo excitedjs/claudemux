@@ -149,7 +149,13 @@ jobs:
           # node-version: '22' resolves to the latest Node 22.x release, which
           # is always >= 22.14.0 on current GitHub-hosted runners.
           node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
+          # No registry-url here: setup-node's registry-url writes an .npmrc
+          # whose `_authToken` resolves to a placeholder value, and npm reads
+          # that placeholder as credentials — which keeps the tokenless OIDC
+          # handshake from running, so the registry treats the publish as
+          # anonymous and returns a misleading 404. Omitting registry-url lets
+          # npm authenticate purely via the GitHub OIDC token (id-token: write).
+          # The default registry is already https://registry.npmjs.org.
 
       - name: Decide whether this version needs publishing
         id: guard
