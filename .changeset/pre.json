@@ -1,9 +1,0 @@
-{
-  "mode": "pre",
-  "tag": "beta",
-  "initialVersions": {
-    "@excitedjs/tm": "1.1.0",
-    "claude-channel-feishu": "0.1.1"
-  },
-  "changesets": []
-}
