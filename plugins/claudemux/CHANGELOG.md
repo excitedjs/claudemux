@@ -1,11 +1,5 @@
 # claudemux
 
-## 1.3.1
-
-### Patch Changes
-
-- 2dcd133: Trigger a real release run to verify the OIDC publish permission fix end to end. This entry exists solely to exercise the release → publish pipeline after granting `id-token: write` at the workflow level, so a stable version is bumped, pushed, and published via OIDC trusted publishing. It carries no functional or user-facing change.
-
 ## 1.3.0
 
 ### Minor Changes
