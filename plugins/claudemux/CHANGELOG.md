@@ -1,11 +1,5 @@
 # claudemux
 
-## 1.3.1
-
-### Patch Changes
-
-- 92285a5: Trigger a real release run to verify the npm OIDC trusted-publishing fix end to end. This entry exists solely to exercise the release → publish pipeline after dropping `actions/setup-node`'s `registry-url`, so a stable version is bumped, pushed, and published via OIDC trusted publishing. It carries no functional or user-facing change.
-
 ## 1.3.0
 
 ### Minor Changes
