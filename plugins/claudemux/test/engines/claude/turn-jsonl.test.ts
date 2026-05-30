@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 
 import {
+  lastAssistantTextAfter,
   terminalAssistantAfter,
   transcriptSizeBytes,
   userEntryAppearedAfter,
@@ -165,5 +166,51 @@ describe('terminalAssistantAfter — turn-end signal, offset-anchored', () => {
     mkdirSync(join(jsonl, '..'), { recursive: true })
     writeFileSync(jsonl, `${userPrompt('new')}\n${assistant('end_turn', ['text'])}\n{"type":"assist`)
     expect(terminalAssistantAfter(jsonl, 0)).toBe(true)
+  })
+})
+
+describe('lastAssistantTextAfter — reply recovery for the no-hook fallback', () => {
+  /** An assistant entry carrying a specific text deliverable. */
+  function reply(text: string): string {
+    return JSON.stringify({
+      type: 'assistant',
+      message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text }] },
+    })
+  }
+
+  test('returns the joined text of this turn, never a prior turn before the offset', () => {
+    write(jsonl, [userPrompt('prior'), reply('OLD REPLY')])
+    const offset = transcriptSizeBytes(jsonl)
+    write(jsonl, [userPrompt('prior'), reply('OLD REPLY'), userPrompt('new'), reply('NEW REPLY')])
+    expect(lastAssistantTextAfter(jsonl, offset)).toBe('NEW REPLY')
+  })
+
+  test('joins multiple text blocks in the last assistant entry', () => {
+    const multi = JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        stop_reason: 'end_turn',
+        content: [{ type: 'text', text: 'foo' }, { type: 'text', text: 'bar' }],
+      },
+    })
+    write(jsonl, [userPrompt('new'), multi])
+    expect(lastAssistantTextAfter(jsonl, 0)).toBe('foobar')
+  })
+
+  test('returns null for a tool-only turn (no text block to recover)', () => {
+    write(jsonl, [userPrompt('new'), assistant('end_turn', ['tool_use'])])
+    expect(lastAssistantTextAfter(jsonl, 0)).toBeNull()
+  })
+
+  test('returns null when no assistant entry is appended past the offset', () => {
+    write(jsonl, [userPrompt('prior'), reply('OLD REPLY')])
+    const offset = transcriptSizeBytes(jsonl)
+    write(jsonl, [userPrompt('prior'), reply('OLD REPLY'), userPrompt('new')])
+    expect(lastAssistantTextAfter(jsonl, offset)).toBeNull()
+  })
+
+  test('returns null for a missing transcript', () => {
+    expect(lastAssistantTextAfter(join(SCRATCH, 'nope.jsonl'), 0)).toBeNull()
   })
 })

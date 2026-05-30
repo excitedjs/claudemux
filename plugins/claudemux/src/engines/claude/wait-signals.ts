@@ -110,6 +110,9 @@ export async function confirmSubmit(
   }
 }
 
+/** Which signal ended the turn — the Stop-hook idle marker, or the transcript. */
+export type TurnEndSignal = 'marker' | 'jsonl'
+
 /**
  * Block until the teammate's turn ends, by either signal: the Stop-hook
  * idle marker `/tmp/claude-idle/<sid>` (the primary path), OR — when the
@@ -117,8 +120,14 @@ export async function confirmSubmit(
  * send offset (`terminalAssistantAfter`). The JSONL branch is the
  * no-hook fallback: a session whose Stop hook never fired still unblocks
  * here once its turn reaches a terminal stop_reason on disk, instead of
- * burning the full timeout to a 124. When `jsonl` is `null` this is
- * byte-for-byte `waitIdleSignal`.
+ * burning the full timeout to a 124. When `jsonl` is `null` the JSONL
+ * branch never trips, so this is byte-for-byte `waitIdleSignal`.
+ *
+ * On success it reports WHICH signal ended the turn (`via`). The caller
+ * needs this: on `via: 'marker'` the Stop hook already wrote `<sid>.last`
+ * (it writes `.last` before touching the idle marker), but on
+ * `via: 'jsonl'` no hook ran, so `.last` is absent and the reply must be
+ * recovered from the transcript. This function itself stays read-only.
  */
 export async function waitForTurnEnd(
   name: TeammateName,
@@ -126,7 +135,7 @@ export async function waitForTurnEnd(
   fresh: boolean,
   runTmux: TmuxRunner,
   anchor: TurnAnchor,
-): Promise<TmResult | { ok: boolean }> {
+): Promise<TmResult | { ok: true; via: TurnEndSignal } | { ok: false }> {
   const sessionMissing = await requireSession(name, runTmux)
   if (sessionMissing !== null) return sessionMissing
   const sidR = resolveSidOrDie(name)
@@ -136,9 +145,9 @@ export async function waitForTurnEnd(
   const end = nowSec() + timeoutSec
   const marker = idleMarkerFor(sidR.sid)
   while (nowSec() < end) {
-    if (existsSync(marker)) return { ok: true }
+    if (existsSync(marker)) return { ok: true, via: 'marker' }
     if (anchor.jsonl !== null && terminalAssistantAfter(anchor.jsonl, anchor.sinceBytes)) {
-      return { ok: true }
+      return { ok: true, via: 'jsonl' }
     }
     await sleepMs(3000)
   }

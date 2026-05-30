@@ -186,7 +186,9 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       surfaces a stderr warning instead of a silent wait. The wait then
       unblocks on either the Stop-hook idle marker OR a settled turn in
       the transcript jsonl, so a session whose Stop hook never loaded
-      still ends its wait on disk evidence instead of timing out.
+      still ends its wait on disk evidence instead of timing out. On
+      that no-hook path the reply is recovered from the transcript (and
+      written back to <sid>.last), so stdout still carries it.
       Empty stdout never silently means success: a turn with no text
       (tool-only, /compact, /clear) prints the sentinel line "(no
       text reply this turn — tool-only, /compact, /clear, or fresh

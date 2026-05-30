@@ -113,10 +113,21 @@ the region THIS turn appends:
   `stop_reason` plus a `text`/`tool_use` block — the same predicate
   `on-stop.sh` applies). A session whose `Stop` hook never loaded still
   ends its wait on disk evidence rather than burning the full timeout.
+  It reports which signal ended the turn (`via: 'marker' | 'jsonl'`):
+  on `marker` the hook already wrote `<sid>.last` (it writes `.last`
+  before touching the idle marker), but on `jsonl` no hook ran, so the
+  reply lives only in the transcript.
 
-This is a read-only supplement: it never writes protocol files, and when
-the transcript path cannot be resolved it no-ops, leaving the
-marker-based behavior exactly as above.
+The wait/confirm reads are a read-only supplement — they write no
+protocol files, and when the transcript path cannot be resolved they
+no-op, leaving the marker-based behavior exactly as above. The one
+write this enables is downstream, in `tm send`: on the `via: 'jsonl'`
+path it recovers the reply text from the turn's appended region
+(`lastAssistantTextAfter`, scoped to the send offset) and writes it to
+`<sid>.last` the same way `tm spawn --resume` seeds it — so stdout and a
+later `tm last` / `tm states` all surface the reply instead of the
+"(no text reply…)" sentinel. A textless (tool-only) turn writes an empty
+`.last`, clearing any stale value.
 
 ## See also
 

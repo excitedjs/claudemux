@@ -13,13 +13,15 @@
  *     (which fans out by calling `claudeSend` directly).
  */
 
+import { writeFileSync } from 'node:fs'
+
 import { sendKeys } from './keys'
 import { confirmSubmit, probeStillAlive, waitForTurnEnd, waitPaneQuiet } from './wait-signals'
 import { echoCtxToStderr, printLastOrEmpty } from './post-turn'
 import { transcriptFile } from './ctx'
-import { transcriptSizeBytes } from './turn-jsonl'
+import { lastAssistantTextAfter, transcriptSizeBytes } from './turn-jsonl'
 import { readIfNonEmpty, resolveSid, rstrip } from './idle'
-import { cwdFile } from '../../persistence/paths'
+import { cwdFile, lastFileFor } from '../../persistence/paths'
 import { die } from './tmux'
 import { isNonNegativeInteger } from './clock'
 import { parseSendArgs } from '../../shared/verb-args'
@@ -99,6 +101,25 @@ export async function claudeSend(args: readonly string[], env: ClaudeVerbEnv): P
         `tm send: sync wait expired after ${timeoutSec}s on ${name} ` +
         `(no ${kind} fired; the teammate is still running — tail with ` +
         `'tm wait ${name}' or check 'tm status ${name}'). exit ${EXIT_SYNC_WAIT_EXPIRED}.\n`,
+    }
+  }
+
+  // No-hook JSONL fallback: the turn settled in the transcript but the
+  // Stop hook never wrote `<sid>.last` (sendKeys' clearIdle wiped it at
+  // send time and no hook repopulated it). Recover the reply from THIS
+  // turn's appended region — scoped to the send offset, so a prior turn's
+  // text is never surfaced — and persist it exactly as `tm spawn --resume`
+  // seeds `.last`, so stdout AND `tm last` / `tm states` all surface the
+  // reply instead of the "(no text reply...)" sentinel. A textless turn
+  // (tool-only) writes an empty `.last`, clearing any stale value. The
+  // marker path is left untouched: on-stop writes `.last` before touching
+  // the idle marker, so `via: 'marker'` means `.last` is already current.
+  if (!paneQuiet && 'via' in verdict && verdict.via === 'jsonl' && jsonl !== null && sid0 !== null) {
+    const recovered = lastAssistantTextAfter(jsonl, anchor.sinceBytes)
+    try {
+      writeFileSync(lastFileFor(sid0), recovered !== null && recovered.length > 0 ? `${recovered}\n` : '')
+    } catch {
+      // Best-effort: printLastOrEmpty falls back to the sentinel if unwritten.
     }
   }
 

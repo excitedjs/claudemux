@@ -130,3 +130,36 @@ export function terminalAssistantAfter(path: string, sinceBytes: number): boolea
   }
   return sawAssistant && lastAssistantSettled
 }
+
+/**
+ * The joined text of the most recent text-bearing assistant entry in the
+ * region appended after `sinceBytes`, or `null` when none exists (no
+ * assistant entry, or a tool-only / thinking-only turn with no `text`
+ * block). Mirrors `readLastAssistantText` — the on-stop hook's
+ * `extract_last_turn` shape — but scoped to THIS turn's appended region,
+ * so a prior turn's reply can never be recovered as this turn's.
+ *
+ * `tm send` uses this on the no-hook JSONL wait-fallback path: the Stop
+ * hook never wrote `<sid>.last`, so the deliverable lives only in the
+ * transcript, and this recovers it to repopulate `.last` and stdout.
+ */
+export function lastAssistantTextAfter(path: string, sinceBytes: number): string | null {
+  const entries = parsedLines(readAppended(path, sinceBytes))
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i]!
+    if (entry['type'] !== 'assistant') continue
+    const message = entry['message']
+    if (!isPlainObject(message)) continue
+    const content = Array.isArray(message['content']) ? message['content'] : []
+    const texts: string[] = []
+    for (const block of content) {
+      if (!isPlainObject(block)) continue
+      if (block['type'] !== 'text') continue
+      const t = block['text']
+      if (typeof t === 'string') texts.push(t)
+    }
+    const joined = texts.join('')
+    if (joined.length > 0) return joined
+  }
+  return null
+}
