@@ -121,7 +121,11 @@ jobs:
             exit 0
           fi
           v=$(jq -r .version plugins/claudemux/package.json)
-          git commit -m "chore(release): claudemux ${v}"
+          # [skip ci] keeps this bot bump commit from starting a redundant second
+          # round of ci + gitleaks + this release workflow. The App-token push
+          # below would otherwise trigger them all again on a commit that only
+          # bumps the version; publishing already ran in this same run.
+          git commit -m "chore(release): claudemux ${v} [skip ci]"
           git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin HEAD:"$REF"
           echo "did_release=true" >> "$GITHUB_OUTPUT"
