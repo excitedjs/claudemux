@@ -1,8 +1,24 @@
 # shellcheck shell=sh
-# Commit author email must be a real, well-formed address — the same rule the
+# Commit author email must be a real, well-formed address -- the same rule the
 # CI workflow enforces. scripts/check-author is the single source of truth.
 author_email=$(git var GIT_AUTHOR_IDENT | sed -n 's/.*<\(.*\)>.*/\1/p')
 if ! "$(git rev-parse --show-toplevel)/scripts/check-author" "$author_email"; then
   echo "Fix:    git config user.email you@example.com" >&2
   exit 1
+fi
+
+# Anti-leak guardrail: scan staged changes for secrets before they are
+# committed. The authoritative, non-bypassable gate is the gitleaks CI job
+# (full history); this is the local early-catch. When gitleaks is not installed
+# we warn and continue rather than block the commit -- CI still enforces it.
+if command -v gitleaks >/dev/null 2>&1; then
+  if ! gitleaks protect --staged --redact \
+      --config "$(git rev-parse --show-toplevel)/.gitleaks.toml"; then
+    echo "gitleaks: staged changes contain a potential secret -- commit blocked." >&2
+    echo "Review the finding above. If it is a false positive, tune .gitleaks.toml." >&2
+    exit 1
+  fi
+else
+  echo "gitleaks not installed -- skipping local secret scan (CI still enforces it)." >&2
+  echo "Install: https://github.com/gitleaks/gitleaks#installing" >&2
 fi

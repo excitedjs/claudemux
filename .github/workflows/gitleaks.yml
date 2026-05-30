@@ -1,0 +1,34 @@
+name: gitleaks
+
+# Secret-scanning gate. Scans the full git history -- every commit, lockfiles
+# included -- on every push and pull request, and fails when a secret or a
+# Feishu identifier / credential format is found. This is the authoritative,
+# non-bypassable gate (make it a required check in branch protection).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: `gitleaks detect` walks every commit, so the whole
+          # history (including any lockfile that ever carried a leak) is scanned.
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: 8.18.4
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Scan full history (lockfiles included)
+        # No path is excluded, so pnpm-lock.yaml is scanned. --redact keeps any
+        # finding out of the CI log. Non-zero exit on a finding fails the job.
+        run: gitleaks detect --source . --config .gitleaks.toml --redact --verbose --exit-code 1
