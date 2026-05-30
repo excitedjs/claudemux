@@ -126,12 +126,23 @@ function seedTeammateSid(name: string): string {
   return sid
 }
 
+let savedConfirmMs: string | undefined
+
 beforeEach(() => {
   createdNames.length = 0
   createdSids.length = 0
+  // These tests pin the wait-expiry (124) contract on synthetic
+  // "send succeeded, nothing else happened" scenarios that carry no
+  // submit-confirmation evidence. Disable confirmSubmit so it neither
+  // delays nor reshapes them — its own coverage lives in
+  // submit-confirm.test.ts.
+  savedConfirmMs = process.env['CLAUDEMUX_CONFIRM_SUBMIT_MS']
+  process.env['CLAUDEMUX_CONFIRM_SUBMIT_MS'] = '0'
 })
 
 afterEach(() => {
+  if (savedConfirmMs === undefined) delete process.env['CLAUDEMUX_CONFIRM_SUBMIT_MS']
+  else process.env['CLAUDEMUX_CONFIRM_SUBMIT_MS'] = savedConfirmMs
   for (const name of createdNames) {
     rmSync(sidFile(name), { force: true })
   }

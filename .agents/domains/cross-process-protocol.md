@@ -93,6 +93,31 @@ that only woke on `Stop` would hang forever on a `/compact` turn (ends on
 `PostCompact`) or an API-error turn (`StopFailure`). See
 [decision hook-driven-busy-idle-signal](/.agents/decisions/hook-driven-busy-idle-signal.md).
 
+## JSONL cross-check — submit confirmation and the no-hook wait fallback
+
+The hook markers are the primary signal, but `tm send` also reads the
+teammate's transcript jsonl directly (`src/engines/claude/turn-jsonl.ts`),
+anchored to a byte offset snapshotted at send time so it only ever sees
+the region THIS turn appends:
+
+- **Submit confirmation** — after injecting a prompt + Enter, `tm send`
+  confirms the REPL accepted it as a turn before committing to the wait:
+  the `.busy`/idle marker appeared, or a new `type:"user"` entry landed
+  past the offset. If none appears it re-sends Enter (≤3 attempts) and,
+  failing that, warns and proceeds — never converting a slow-but-live
+  send into a hard failure. This catches the "Enter swallowed by a
+  modal" class (the resume-prompt race among them) instead of silently
+  waiting to a 124.
+- **No-hook wait fallback** — `waitForTurnEnd` unblocks on the idle
+  marker OR a settled assistant entry appended past the offset (terminal
+  `stop_reason` plus a `text`/`tool_use` block — the same predicate
+  `on-stop.sh` applies). A session whose `Stop` hook never loaded still
+  ends its wait on disk evidence rather than burning the full timeout.
+
+This is a read-only supplement: it never writes protocol files, and when
+the transcript path cannot be resolved it no-ops, leaving the
+marker-based behavior exactly as above.
+
 ## See also
 
 - [components/tm.md](/.agents/components/tm.md) — the consumer side.
