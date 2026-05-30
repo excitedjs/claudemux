@@ -7,12 +7,15 @@ on:
 
 jobs:
   claudemux-changeset-status:
-    # Authored-PR gate: every PR into next that touches a release surface must
-    # declare a changeset. PRs into main are promotions (next -> main), which
-    # carry no new changeset, so they are excluded.
+    # Authored-PR gate: a PR into a release branch (main=stable, next=beta) that
+    # touches a release surface must declare a changeset. Runs on PRs into main
+    # or next; skips PRs targeting other (alpha) branches, and skips the
+    # next -> main promotion (head=next) whose changesets are already consumed
+    # in pre mode (changeset status would false-fail on it).
     if: >
       github.event_name == 'pull_request' &&
-      github.base_ref != 'main'
+      (github.base_ref == 'main' || github.base_ref == 'next') &&
+      github.head_ref != 'next'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +39,42 @@ jobs:
 
       - name: Changeset declaration check
         run: pnpm changeset status --since="origin/${{ github.base_ref }}"
+
+  claudemux-channel-alignment:
+    # Branch <-> release-channel guardrail. The branch fixes the channel
+    # (main=stable, next=beta, any other base=alpha); this checks the PR's base
+    # branch against the committed pre-release state of the merge result, so a
+    # merge that would put the branch in the wrong channel is blocked here
+    # rather than misfiring in the release pipeline after merge.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check branch <-> channel alignment
+        run: |
+          base="${{ github.base_ref }}"
+          mode=""; tag=""
+          if [ -f .changeset/pre.json ]; then
+            mode=$(jq -r '.mode // ""' .changeset/pre.json)
+            tag=$(jq -r '.tag // ""' .changeset/pre.json)
+          fi
+          case "$base" in
+            main)
+              if [ "$mode" = "pre" ]; then
+                echo "::error::main is the stable channel: it must not be in pre mode (found mode=$mode). Run 'changeset pre exit' before merging to main."
+                exit 1
+              fi
+              echo "main -> stable: no pre mode (ok)" ;;
+            next)
+              if [ "$mode" != "pre" ] || [ "$tag" != "beta" ]; then
+                echo "::error::next is the beta channel: it must be in beta pre mode (found mode='$mode' tag='$tag'). Run 'changeset pre enter beta'."
+                exit 1
+              fi
+              echo "next -> beta pre mode (ok)" ;;
+            *)
+              echo "base '$base' -> alpha channel; no pre-release state required (ok)" ;;
+          esac
 
   check:
     strategy:

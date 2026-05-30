@@ -1,0 +1,189 @@
+name: claudemux release
+
+# Unified release pipeline. The branch fixes the channel (the source of truth);
+# the semver level always comes from the changeset fragments:
+#   main  -> stable   X.Y.Z              (changeset version, no pre mode)
+#   next  -> beta     X.Y.Z-beta.N       (pre mode committed on next)
+#   other -> alpha    X.Y.Z-alpha-<sha>  (changeset snapshot; manual only)
+# Branch<->channel alignment is enforced earlier, in the CI `channel-alignment`
+# job on pull requests; this pipeline only publishes per channel.
+on:
+  push:
+    branches: [main, next]
+  # Conservative alpha: non-mainline branches publish only when manually
+  # dispatched — feature pushes never auto-release.
+  workflow_dispatch:
+
+concurrency:
+  group: claudemux-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+# The bot commits and pushes its own version bump. Husky's local pre-push hook
+# runs `changeset status`, which misfires on that commit (the bump touches a
+# release-surface file whose changeset is already consumed). HUSKY=0 disables
+# the local hooks for this job; the authoritative changeset gate is the CI
+# changeset-status job on PRs.
+env:
+  HUSKY: "0"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      did_release: ${{ steps.release.outputs.did_release }}
+    steps:
+      - name: Create claudemux release app token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CLAUDEMUX_RELEASE_APP_ID }}
+          private-key: ${{ secrets.CLAUDEMUX_RELEASE_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace tooling
+        run: pnpm install --frozen-lockfile
+
+      - name: Release per branch channel
+        id: release
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_SHA: ${{ github.sha }}
+          REF: ${{ github.ref_name }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          # On push (main/next): release only when this push introduced a new
+          # changeset fragment. This breaks the loop — the bot's own release
+          # commit adds no fragment, so its push no-ops. A manual dispatch is an
+          # intentional run, so it skips this guard.
+          if [ "$EVENT" = push ]; then
+            added="$(git diff --name-only --diff-filter=A "$PUSH_BEFORE" "$PUSH_SHA" -- '.changeset/*.md' | grep -v '/README.md$' || true)"
+            if [ -z "$added" ]; then
+              echo 'No newly added changesets in this push; skipping.'
+              echo "did_release=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git config user.name 'github-actions[bot]'
+
+          case "$REF" in
+            main)
+              # stable: pre.json is absent on main (enforced by channel-alignment)
+              pnpm --dir plugins/claudemux version-packages
+              ;;
+            next)
+              # beta: pre.json committed on next drives the -beta.N counter
+              pnpm --dir plugins/claudemux version-packages
+              ;;
+            *)
+              # alpha: ephemeral snapshot for non-mainline branches. Conservative
+              # for now — the version is produced but NOT committed or pushed;
+              # how an alpha is delivered for a marketplace (git) plugin is an
+              # open decision.
+              pnpm --dir plugins/claudemux exec changeset version --snapshot alpha
+              node plugins/claudemux/scripts/sync-plugin-version.mjs
+              echo "alpha snapshot: $(jq -r .version plugins/claudemux/package.json) (ephemeral; not pushed — delivery TBD)"
+              echo "did_release=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+
+          git add -A
+          if git diff --staged --quiet; then
+            echo 'Nothing to commit.'
+            echo "did_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          v=$(jq -r .version plugins/claudemux/package.json)
+          git commit -m "chore(release): claudemux ${v}"
+          git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin HEAD:"$REF"
+          echo "did_release=true" >> "$GITHUB_OUTPUT"
+
+  # Publishes @excitedjs/tm to npm using OIDC trusted publishing — no
+  # long-lived npm token required. npm exchanges the GitHub OIDC token for a
+  # short-lived publish token; the package must list this workflow as a trusted
+  # publisher on npmjs.com (repo=excitedjs/claudemux, workflow=claudemux-release.yml).
+  #
+  # Runs only when the release job actually bumped and pushed a version (main or
+  # next). Never runs on alpha (ephemeral snapshot) or on the bot's own release
+  # commit re-push (did_release=false in both cases). Never triggered by fork
+  # pull requests: the trigger is push to main/next, not pull_request.
+  publish:
+    needs: release
+    if: needs.release.outputs.did_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read   # checkout only; no git write needed
+      id-token: write  # OIDC token for npm trusted publishing
+    steps:
+      # Checkout the branch after the release job's version-bump commit landed.
+      # ref: github.ref_name (e.g. "main") resolves to the branch HEAD, which
+      # now includes the bot commit, so package.json carries the new version.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-node@v6
+        with:
+          # OIDC tokenless trusted publishing requires Node >= 22.14.0.
+          # node-version: '22' resolves to the latest Node 22.x release, which
+          # is always >= 22.14.0 on current GitHub-hosted runners.
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Decide whether this version needs publishing
+        id: guard
+        working-directory: plugins/claudemux
+        run: |
+          name=$(jq -r .name package.json)
+          version=$(jq -r .version package.json)
+          # Idempotency net: publish only a version npm does not already carry,
+          # so a release run whose version is already on npm (e.g. a one-time
+          # version reconciliation) does not attempt to republish and fail.
+          if npm view "${name}@${version}" version >/dev/null 2>&1; then
+            echo "already published ${name}@${version}; nothing to do."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "will publish ${name}@${version}."
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upgrade npm for OIDC trusted publishing
+        if: steps.guard.outputs.go == 'true'
+        # Two separate npm version thresholds apply here:
+        #   >= 9.6.0  — `--provenance` flag (attestation only; still needs a token)
+        #   >= 11.5.1 — OIDC tokenless trusted publishing (GA 2025-07-31):
+        #               npm exchanges the GitHub OIDC token for a short-lived
+        #               publish token automatically, no NODE_AUTH_TOKEN needed.
+        # Node 22 LTS ships npm 10.x, which is below the 11.5.1 threshold.
+        # This step upgrades to the exact version that introduced the feature.
+        run: npm install -g npm@11.5.1
+
+      - name: Publish @excitedjs/tm to npm (OIDC trusted publishing)
+        if: steps.guard.outputs.go == 'true'
+        working-directory: plugins/claudemux
+        run: npm publish --provenance --access public
+        # No NODE_AUTH_TOKEN — npm 11.5.1+ automatically detects the GitHub
+        # Actions OIDC environment and exchanges the token with the npm registry.
+        # The package must be configured as a trusted publisher on npmjs.com
+        # (repo=excitedjs/claudemux, workflow=claudemux-release.yml).

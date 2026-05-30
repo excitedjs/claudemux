@@ -97,7 +97,7 @@ Release-surface paths are declared in `.changeset/config.json` under `changedFil
 Two local hooks run via Husky (installed by `pnpm install`):
 
 - `.husky/pre-commit` — checks the commit author email via `scripts/check-author`.
-- `.husky/pre-push` — runs `pnpm changeset status --since=origin/next` to catch missing changeset fragments before push.
+- `.husky/pre-push` — runs `pnpm changeset status --since=origin/main` to catch missing changeset fragments before push.
 
 Pure-docs commits (README, CLAUDE.md, KB files, `*.md` outside `SKILL.md`), CI/test changes, and edits limited to a manifest's description/keywords remain exempt from release intent.
 

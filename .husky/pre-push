@@ -6,4 +6,4 @@
 # reports false-positive "no changesets found" errors.
 unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_QUARANTINE_PATH
 
-pnpm changeset status --since=origin/next
+pnpm changeset status --since=origin/main

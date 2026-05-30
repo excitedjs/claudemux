@@ -36,49 +36,55 @@ Authors record claudemux release intent by writing a fragment directly to
 records the package, semver level, and release note text. The feature commit
 carries that fragment instead of editing a version field.
 
-### Release automation consumes fragments by direct push
+### One unified pipeline; the branch fixes the channel
 
-Merging into a trunk runs `changeset version` and pushes the result back to
-that branch as the release bot — no intermediate "Version Packages" PR.
+`claudemux-release.yml` publishes per branch by direct push — no intermediate
+"Version Packages" PR. The branch fixes the channel; the semver level always
+comes from the fragments:
 
-- `next` (`claudemux-release-next.yml`, on push): runs
-  `pnpm --dir plugins/claudemux version-packages`, which calls `changeset
-  version` and then mirrors the resulting package version into the Claude
-  plugin manifest, commits `chore(release): claudemux beta`, and pushes to
-  `next`. It is a no-op when the push added no new `.changeset/*.md`.
-- `main` (`claudemux-release-main.yml`, on push): runs
-  `pnpm --dir plugins/claudemux version-ga` (`changeset pre exit && changeset
-  version && sync`), commits the GA version, and pushes to `main`.
+- `main` → stable `X.Y.Z` (on push): `version-packages`
+  (`changeset version` + plugin.json sync), commit, push to `main`.
+- `next` → beta `X.Y.Z-beta.N` (on push): same `version-packages`; the
+  committed `pre.json` on `next` makes `changeset version` emit `-beta.N`.
+- any other branch → alpha `X.Y.Z-alpha-<sha>` (manual `workflow_dispatch`
+  only — feature pushes never auto-release): `changeset version --snapshot
+  alpha`, ephemeral, not pushed. How an alpha is delivered for a marketplace
+  (git) plugin is an open decision.
 
-The bot push runs with `HUSKY=0`, because the local pre-push changeset hook
-(below) misfires on a release commit: the bump touches a release-surface file
-(`package.json`) whose changeset is already consumed.
+On push the pipeline releases only when the push added a new `.changeset/*.md`
+(the bot's own release commit adds none → no-op → loop break). The bot push
+runs with `HUSKY=0`, because the local pre-push changeset hook (below) misfires
+on a release commit: the bump touches a release-surface file (`package.json`)
+whose changeset is already consumed.
 
-### `next` is the beta channel; `main` is GA
+### The branch is the channel SoT; pre.json is beta-only
 
-`/.changeset/pre.json` keeps claudemux in Changesets pre mode on `next`, tag
-`beta`, so merges to `next` produce `-beta.N` versions. In pre mode `changeset
-version` records consumed fragments in `pre.json` and retains the `.md` files;
-they accumulate until GA.
+Three channels by fixed branch map: `main`=stable, `next`=beta, any other
+branch=alpha. The channel is decided by the branch — not by a single config
+file. `pre.json` is **not** the channel source of truth: stable (`main`) and
+alpha (feature) both have none, so it cannot distinguish them. `pre.json` exists
+only on `next`, to persist the `-beta.N` counter; `main` and feature branches
+carry none (alpha is a snapshot).
 
-GA is bound to the `next → main` merge. `release-main` runs only when the
-merged state still carries `pre.json` mode `pre`; `changeset pre exit`
-consumes the accumulated fragments into the stable version, deletes the
-fragments, and deletes `pre.json` — so the bot's own GA commit re-triggers the
-workflow with no pre.json and the guard exits. After a successful GA,
-`claudemux-reset-next-pre.yml` fast-forwards `next` to main's GA state and
-re-enters beta pre mode, so the next prerelease cycle versions from the GA base
-rather than re-consuming shipped changesets.
+Branch↔channel alignment is enforced at PR time by the CI
+`claudemux-channel-alignment` job (`main` must not be in pre mode; `next` must
+be in beta pre mode), so a misaligned merge is blocked before it reaches the
+release pipeline. The pipeline itself only publishes — it does not validate.
+
+Entering pre mode (open a beta line on `next`) and exiting it (promote `next`
+into `main` for a GA) are deliberate out-of-band `changeset pre enter` /
+`changeset pre exit` acts, not per-push pipeline steps. `next` is re-cut from
+`main` per major cycle, so its pre base stays current and a GA never
+re-consumes shipped changesets.
 
 ### Changeset enforcement is CI-owned
 
-The authoritative gate is the CI `claudemux-changeset-status` job on every PR
-into `next`: a PR that touches a release surface without a changeset fails.
-The local `.husky/pre-push` hook runs the same check as best-effort fast
-feedback, but it is advisory — it does not fire in a fresh clone or worktree
-that has not run `pnpm install`, and it is disabled (`HUSKY=0`) in the release
-jobs. The release surface for claudemux is declared in
-`/.changeset/config.json` with `changedFilePatterns`.
+The authoritative gate is the CI `claudemux-changeset-status` job: a PR that
+touches a release surface without a changeset fails. The local `.husky/pre-push`
+hook runs the same check as best-effort fast feedback, but it is advisory — it
+does not fire in a fresh clone or worktree that has not run `pnpm install`, and
+it is disabled (`HUSKY=0`) in the release job. The release surface for claudemux
+is declared in `/.changeset/config.json` with `changedFilePatterns`.
 
 ## Why this keeps the version ↔ change mapping
 
