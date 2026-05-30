@@ -52,7 +52,7 @@ heart of the system; see [the cross-process protocol](/.agents/domains/cross-pro
 
 | Path | What it is |
 |---|---|
-| `plugins/claudemux/` | The claudemux plugin: `bin/tm`, `hooks/`, `skills/`, `templates/`, `commands/`, `test/` |
+| `plugins/claudemux/` | The claudemux plugin: `bin/tm`, `src/` (the TypeScript CLI), `third_party/` (vendored `ws`), `hooks/`, `skills/`, `templates/`, `commands/`, `test/` |
 | `plugins/feishu-channel/` | Second plugin — a Feishu channel for Claude Code (TypeScript on Node), shipped independently from this repo |
 | `scripts/` | Repo-level governance scripts — `check-author` (the author-email rule, shared with CI) |
 | `.github/workflows/ci.yml` | CI — shellcheck + bats for the Bash surface, plus pnpm/Node jobs for the TypeScript core and feishu-channel |
@@ -70,7 +70,7 @@ heart of the system; see [the cross-process protocol](/.agents/domains/cross-pro
 | The `dispatcher` skill, its references, the dispatcher template, `/claudemux:setup` | [components/dispatcher-skill.md](/.agents/components/dispatcher-skill.md) |
 | The `optimize` skill — periodic dispatcher self-review | [components/optimize-skill.md](/.agents/components/optimize-skill.md) |
 | The `feishu-channel` plugin | [components/feishu-channel.md](/.agents/components/feishu-channel.md) |
-| The orchestration core that replaces `tm` on the `next` branch — modules, the teammate registry, the resident subscription | [components/claudemux-core.md](/.agents/components/claudemux-core.md) |
+| The orchestration core — the `tm` CLI's TypeScript modules, the Claude/Codex engines, persistence and identity | [components/claudemux-core.md](/.agents/components/claudemux-core.md) |
 | Repo tooling — versioning, lint, CI, tests | [components/repo-tooling.md](/.agents/components/repo-tooling.md) |
 
 **Domains** — cross-cutting contracts that span more than one component:
@@ -79,7 +79,7 @@ heart of the system; see [the cross-process protocol](/.agents/domains/cross-pro
 |---|---|
 | Anything that reads or writes a `/tmp` protocol file, or a `tm`↔hook seam | [domains/cross-process-protocol.md](/.agents/domains/cross-process-protocol.md) |
 | The Feishu Worker-scoped subscription design — holder/endpoint split, the `routes/`+`inbox/` protocol | [domains/feishu-worker-routing.md](/.agents/domains/feishu-worker-routing.md) |
-| The Node CLI orchestrator that replaces `tm` on the `next` branch (`1.0.0`) — the CLI model, the Claude and Codex teammate drivers, the migration roadmap | [domains/node-cli-orchestrator.md](/.agents/domains/node-cli-orchestrator.md) |
+| The Node CLI orchestrator — the CLI model, the Claude and Codex teammate drivers, and the architecture contract | [domains/node-cli-orchestrator.md](/.agents/domains/node-cli-orchestrator.md) |
 
 **Decisions** — why the system is shaped the way it is:
 
@@ -93,6 +93,7 @@ heart of the system; see [the cross-process protocol](/.agents/domains/cross-pro
 **Proposals** — current design proposals that have not become decisions:
 
 - [Codex multi-client live sync](/.agents/proposals/codex-multiclient-live-sync.md) — options for making claudemux Codex teammates visible to Desktop and VS Code clients.
+- Archived input drafts also live under `proposals/` — the two multi-engine architecture drafts and the phase-1 bug audit — reachable from the decision they fed, [multi-engine-tui-architecture](/.agents/decisions/multi-engine-tui-architecture.md). Each carries a status banner.
 
 **Rules & meta:**
 

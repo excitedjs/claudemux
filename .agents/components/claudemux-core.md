@@ -1,22 +1,20 @@
-# Component: the orchestration core (the `next` line)
+# Component: the orchestration core
 
-The TypeScript orchestration code for claudemux's **`next`** line — the
-`1.0.0` line developed in parallel with `main`'s 0.x — lives directly under
+claudemux's `tm` CLI is implemented in TypeScript, living directly under
 [`/plugins/claudemux/`](/plugins/claudemux), in the plugin root alongside
 `bin/`, `hooks/`, `skills/`, `templates/`, and the `.claude-plugin/` manifest.
 The TypeScript sources are under [`src/`](/plugins/claudemux/src) and tests
 under [`test/`](/plugins/claudemux/test); the suite uses **vitest**.
 
 [Decision node-cli-orchestrator](/.agents/decisions/node-cli-orchestrator.md) set the
-shape: the `next` line's orchestrator is a **pure Node CLI** — `tm` rewritten
-from the Bash script into TypeScript, invoked once per command, with no
-resident process and no MCP server. The architecture and the migration roadmap
-are the domain spec,
+shape: the orchestrator is a **pure Node CLI** — `tm` in TypeScript, invoked
+once per command, with no resident process and no MCP server. The architecture
+is the domain spec,
 [domains/node-cli-orchestrator.md](/.agents/domains/node-cli-orchestrator.md);
 this document is the **component** view — what the orchestration modules are
 and what contracts they hold.
 
-> **Status — Phase 2a-3 routes teammate verbs through the Engine layer.**
+> **The verb layer routes teammate verbs through the Engine layer.**
 > All 18 `tm` verbs are implemented in TypeScript and dispatched by
 > [`cli/dispatch.ts`](/plugins/claudemux/src/cli/dispatch.ts); help text lives in
 > [`help.ts`](/plugins/claudemux/src/help.ts). The user-installed
@@ -284,9 +282,9 @@ the run instructions are the suite's own
 
 ## See also
 
-- [domains/node-cli-orchestrator.md](/.agents/domains/node-cli-orchestrator.md) — the CLI architecture and the migration roadmap.
-- [decisions/node-cli-orchestrator.md](/.agents/decisions/node-cli-orchestrator.md) — why the `next` line is a Node CLI.
+- [domains/node-cli-orchestrator.md](/.agents/domains/node-cli-orchestrator.md) — the CLI architecture contract.
+- [decisions/node-cli-orchestrator.md](/.agents/decisions/node-cli-orchestrator.md) — why `tm` is a Node CLI.
 - [decisions/live-teammate-integration-harness.md](/.agents/decisions/live-teammate-integration-harness.md) — how the live-teammate suite seeds trust and gates stage 3.
 - [decisions/mcp-native-orchestration-core.md](/.agents/decisions/mcp-native-orchestration-core.md) — the superseded MCP-native design.
 - [domains/cross-process-protocol.md](/.agents/domains/cross-process-protocol.md) — the `/tmp` marker protocol the Claude-teammate verbs read and write.
-- [components/tm.md](/.agents/components/tm.md) — the Bash `tm` the core fronts and progressively hollows.
+- [components/tm.md](/.agents/components/tm.md) — the `tm` CLI this code implements.

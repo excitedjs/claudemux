@@ -5,9 +5,9 @@ message, wait on, inspect, and kill teammates. Claude Code auto-prepends each
 installed plugin's `bin/` to `PATH`, so `tm` resolves in any Bash subshell of
 a Claude Code session.
 
-## Shape on the `next` line
+## How `tm` is built
 
-On the `next` line `tm` is a small bash launcher at
+`tm` is a small bash launcher at
 [`/plugins/claudemux/bin/tm`](/plugins/claudemux/bin/tm) that `exec`s `node`
 against [`/plugins/claudemux/src/main.ts`](/plugins/claudemux/src/main.ts)
 through `--experimental-transform-types`, with a tiny resolve hook
@@ -26,9 +26,6 @@ module layout. The full rationale (including which alternatives lost) is in
 [zero-install-type-stripping](/.agents/decisions/zero-install-type-stripping.md),
 which supersedes [node-cli-committed-bundle](/.agents/decisions/node-cli-committed-bundle.md)'s
 committed-bundle shape.
-
-The historical Bash `bin/tm` was retired in stage 3c — see
-[domains/node-cli-orchestrator.md](/.agents/domains/node-cli-orchestrator.md) §8.
 
 ## Source of truth for the verb contracts
 
