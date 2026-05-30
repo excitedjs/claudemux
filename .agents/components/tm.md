@@ -91,6 +91,34 @@ protocol. Each has its own decision record — see
 - The help pre-scan in `cli.ts` stops at the first non-flag positional or
   at `--prompt`, so a `--help` substring *inside* a prompt does not trigger
   help mode.
+- `tm ls --all` / `tm states --all` also list killed teammates (`STATE`
+  `killed`), read from the kill-time identity archive
+  (`/tmp/teammate-archive/<name>.json`, enumerated by `listArchived` in
+  [`src/persistence/identity-store.ts`](/plugins/claudemux/src/persistence/identity-store.ts)).
+  This is what keeps a killed session discoverable and resumable by name
+  without scraping `/tmp` by hand; a name that is live again shadows its
+  stale archive row.
+- `tm spawn` prints a `base:` line on a fresh launch — the repo HEAD branch
+  + short sha the worktree branches from, plus a best-effort ahead/behind
+  against the remote default branch — so a repo parked on a non-trunk
+  branch is visible rather than a silent surprise. Best-effort and read-only
+  ([`src/engines/claude/base-ref.ts`](/plugins/claudemux/src/engines/claude/base-ref.ts)):
+  a non-git repo or any failing probe drops the line and never fails the
+  spawn. Skipped on resume / continue and when the worktree already exists.
+- Every teammate tmux session is launched with
+  `-e CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=<huge>` (`spawn.ts`
+  `RESUME_TOKEN_THRESHOLD_SUPPRESS`). Claude Code raises a "Resume from
+  summary vs full session" startup prompt when a resumed session is past
+  both an age and a token threshold; a headless teammate cannot answer it
+  and a following `tm send` would pick the summary default (running
+  `/compact`). Pinning the token threshold above any real window keeps the
+  prompt from ever rendering, so a resumed teammate loads its full session
+  silently. Degrades safely — a build ignoring the knob just re-exposes the
+  prompt.
+- The teammate launch disables `AskUserQuestion`, `EnterPlanMode`, and
+  `ExitPlanMode` (`teammateLaunchFlags` in `spawn.ts`). Each opens a modal
+  that holds a turn open waiting for a human; a teammate proposes a plan or
+  raises a question by ending its turn with text instead.
 
 ## See also
 

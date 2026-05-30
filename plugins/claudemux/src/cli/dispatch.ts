@@ -88,6 +88,24 @@ async function combineResults(results: readonly Promise<TmResult>[]): Promise<Tm
   return { code, stdout, stderr }
 }
 
+/**
+ * Parse the flag set `tm ls` / `tm states` accept. Both take only the
+ * optional `--all` (also list killed teammates from the kill-time
+ * identity archive); any positional or other flag is a usage error so
+ * a typo'd name does not silently behave like a bare fleet listing.
+ */
+function parseFleetListFlags(
+  verb: 'ls' | 'states',
+  rest: readonly string[],
+): { all: boolean } | { error: TmResult } {
+  let all = false
+  for (const arg of rest) {
+    if (arg === '--all') all = true
+    else return { error: die(`tm ${verb}: unexpected argument '${arg}'. Usage: tm ${verb} [--all]`) }
+  }
+  return { all }
+}
+
 // ─── Engine-routed teammate verbs ─────────────────────────────────────────
 
 const ENGINE_VERBS: ReadonlySet<string> = new Set([
@@ -114,10 +132,16 @@ async function dispatchEngineVerb(
   env: NativeEnv,
 ): Promise<TmResult> {
   switch (verb) {
-    case 'ls':
-      return lsVerb(ctx)
-    case 'states':
-      return statesVerb(ctx)
+    case 'ls': {
+      const parsed = parseFleetListFlags('ls', rest)
+      if ('error' in parsed) return parsed.error
+      return lsVerb(ctx, { all: parsed.all })
+    }
+    case 'states': {
+      const parsed = parseFleetListFlags('states', rest)
+      if ('error' in parsed) return parsed.error
+      return statesVerb(ctx, { all: parsed.all })
+    }
     case 'status': {
       if (rest.length === 0) {
         return { code: 1, stdout: '', stderr: 'tm: usage: tm status <name> [lines=80]\n' }

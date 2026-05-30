@@ -253,13 +253,13 @@ describe('Verb-layer default impls — Phase 1 wiring', () => {
     // A zero-engine process is a wiring failure, not a fleet state. The verb
     // must surface that loudly so a Phase 2 production process missing an
     // engine registration fails here, not later in a confused dispatcher.
-    const result = await lsVerb(emptyVerbContext())
+    const result = await lsVerb(emptyVerbContext(), { all: false })
     expect(result.code).toBe(1)
     expect(result.stderr).toContain('no engine registered')
   })
 
   test('statesVerb against an empty registry raises no-engine-registered', async () => {
-    const result = await statesVerb(emptyVerbContext())
+    const result = await statesVerb(emptyVerbContext(), { all: false })
     expect(result.code).toBe(1)
     expect(result.stderr).toContain('no engine registered')
   })

@@ -29,6 +29,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 import { claudeSend } from './send'
+import { gitBaseRefNote } from './base-ref'
 import { readLastAssistantText, transcriptFile } from './ctx'
 import { clearIdle, isDirectory } from './idle'
 import { newSid } from './identifiers'
@@ -46,6 +47,25 @@ import {
 } from '../../persistence/paths'
 import type { ClaudeVerbEnv } from './env'
 import { EXIT_SYNC_WAIT_EXPIRED, type TmResult } from '../../tm'
+
+/**
+ * Value for `CLAUDE_CODE_RESUME_TOKEN_THRESHOLD`, injected into every
+ * teammate tmux session. Claude Code raises a "Resume from summary
+ * (recommended) / Resume full session as-is" startup prompt when a
+ * resumed session is older than `CLAUDE_CODE_RESUME_THRESHOLD_MINUTES`
+ * (default 70) AND larger than `CLAUDE_CODE_RESUME_TOKEN_THRESHOLD`
+ * (default 100_000) tokens. A teammate has no human to answer that
+ * modal, and the next `tm send`'s Enter lands on it — picking the
+ * default "summary" option, which runs `/compact` and discards the
+ * full context the resume was meant to restore. Setting the token
+ * threshold far above any real context window keeps that condition
+ * permanently false, so the prompt never renders and a resumed
+ * teammate always loads its full session silently. Degrades safely:
+ * a Claude Code build that drops this knob simply re-exposes the
+ * prompt, falling back to the documented "confirm with tm status"
+ * guidance.
+ */
+const RESUME_TOKEN_THRESHOLD_SUPPRESS = 100_000_000
 
 interface ClaudeLaunchArgs {
   /** Physical repo path (the parent of the worktree, or the cwd itself). */
@@ -84,9 +104,15 @@ function shellSingleQuote(value: string): string {
  * `claude --session-id|--resume <sid>` and the optional `-n '<name>'`
  * / `--worktree <slug>` extras. A bare tool name in
  * `--disallowedTools` drops it from the model's context entirely.
+ *
+ * `EnterPlanMode` / `ExitPlanMode` join `AskUserQuestion` on the
+ * disallow list for the same reason: plan mode opens an approval modal
+ * that holds the turn open waiting for a human, and a teammate has no
+ * human at its terminal. A teammate proposes a plan by ending its turn
+ * with text, which `tm send` relays to the dispatcher.
  */
 function teammateLaunchFlags(mdExcludes: string): string {
-  return `--settings ${shellSingleQuote(mdExcludes)} --disallowedTools AskUserQuestion`
+  return `--settings ${shellSingleQuote(mdExcludes)} --disallowedTools AskUserQuestion,EnterPlanMode,ExitPlanMode`
 }
 
 /**
@@ -318,7 +344,12 @@ async function claudeLaunch(
   // cannot wrong-route. `-e CLAUDEMUX_TEAMMATE_NAME=...` is the
   // positive identity gate the on-session-start hook reads to
   // discriminate "this teammate" from "the dispatcher happens to
-  // share the cwd".
+  // share the cwd". `-e CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=...`
+  // suppresses Claude Code's "resume from summary vs full session"
+  // startup prompt (see RESUME_TOKEN_THRESHOLD_SUPPRESS): a teammate
+  // is headless and cannot answer that modal, and the prompt's
+  // Enter-default picks the compacted summary — silently dropping the
+  // very context a resume is meant to restore.
   let paneId = ''
   try {
     const newSession = await env.runTmux([
@@ -330,6 +361,8 @@ async function claudeLaunch(
       paneCwd,
       '-e',
       `CLAUDEMUX_TEAMMATE_NAME=${name}`,
+      '-e',
+      `CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=${RESUME_TOKEN_THRESHOLD_SUPPRESS}`,
       '-P',
       '-F',
       '#{session_id}',
@@ -365,6 +398,23 @@ async function claudeLaunch(
     stderr += `spawned: ${name} (tmux=${session}, cwd=${cwd}${worktreeNote}, resumed sid=${sid})\n`
   } else {
     stderr += `spawned: ${name} (tmux=${session}, cwd=${cwd}${worktreeNote}, sid=${sid})\n`
+  }
+
+  // Surface the baseline a fresh spawn starts from. A worktree teammate
+  // branches `worktree-<slug>` off the repo's current HEAD; a
+  // `--no-worktree` teammate runs on it directly. Printing the branch +
+  // short sha (plus best-effort ahead/behind vs the remote default)
+  // makes a repo parked on the wrong branch obvious instead of silent.
+  // Only on the genuine fresh-launch path — resume / continue reuse an
+  // existing session, and an already-present worktree is not re-created
+  // from HEAD, so the note would mislead in those cases.
+  if (resumeSid.length === 0 && !continueLatest) {
+    const worktreeAlreadyThere =
+      worktreeSlug !== null && existsSync(worktreePathFor(repo, worktreeSlug))
+    if (!worktreeAlreadyThere) {
+      const baseNote = await gitBaseRefNote(repo)
+      if (baseNote !== null) stderr += `base: ${baseNote}\n`
+    }
   }
 
   if (!continueLatest) {

@@ -91,6 +91,9 @@ export function archivedIdentityFile(name: TeammateName): string {
 /** Regex pinning the top-level identity-file name shape; capture group 1 is the name. */
 const TOP_LEVEL_FILENAME = /^teammate-(.+)\.json$/
 
+/** Regex pinning the archived identity-file name shape (`<name>.json`, no prefix). */
+const ARCHIVE_FILENAME = /^(.+)\.json$/
+
 export type ReserveResult =
   | { kind: 'reserved' }
   | { kind: 'taken'; existing: TeammateRecordJson }
@@ -225,6 +228,49 @@ export function list(): readonly TeammateRecordJson[] {
     }
     if (!info.isFile()) continue
     const raw = readIfPresent(join(identityRoot(), entry))
+    if (raw === null) continue
+    const parsed = parse(raw)
+    if (parsed !== null) out.push(parsed)
+  }
+  return out
+}
+
+/**
+ * Enumerate every archived teammate record — the snapshots `tm kill`
+ * leaves behind under `<identityRoot>/teammate-archive/<name>.json`.
+ * `tm ls --all` / `tm states --all` use this to surface killed
+ * teammates that no live tmux session or Codex daemon would report,
+ * so the agent can recover a resumable name without scraping `/tmp`.
+ *
+ * The archive holds the LAST snapshot per name: re-spawning then
+ * re-killing a name overwrites its archive entry, and a name that is
+ * currently live also keeps its prior kill's snapshot here. Callers
+ * that merge this with the live fleet must dedupe by name, preferring
+ * the live row.
+ *
+ * Unparseable or schema-mismatched files are skipped, mirroring
+ * `list()`. The directory not existing yet (no teammate ever killed)
+ * returns an empty list, not an error.
+ */
+export function listArchived(): readonly TeammateRecordJson[] {
+  const out: TeammateRecordJson[] = []
+  const dir = archiveDir()
+  let entries: string[]
+  try {
+    entries = readdirSync(dir)
+  } catch {
+    return []
+  }
+  for (const entry of entries) {
+    if (ARCHIVE_FILENAME.exec(entry) === null) continue
+    let info: ReturnType<typeof statSync>
+    try {
+      info = statSync(join(dir, entry))
+    } catch {
+      continue
+    }
+    if (!info.isFile()) continue
+    const raw = readIfPresent(join(dir, entry))
     if (raw === null) continue
     const parsed = parse(raw)
     if (parsed !== null) out.push(parsed)

@@ -24,6 +24,7 @@ import type {
   TeammateStatus,
   TurnResult,
 } from '../engines/types'
+import { listArchived } from '../persistence/identity-store'
 import { EXIT_SYNC_WAIT_EXPIRED, type TmResult } from '../tm'
 
 function rawTmResult(result: RawTmResult): TmResult | null {
@@ -58,6 +59,33 @@ function repoLeaf(path: string): string {
   const slash = trimmed.lastIndexOf('/')
   const leaf = slash >= 0 ? trimmed.slice(slash + 1) : trimmed
   return leaf.length === 0 ? '-' : leaf
+}
+
+/**
+ * Build the `killed` listing rows for `tm ls --all` / `tm states --all`:
+ * every archived identity record whose name is not already present in
+ * the live fleet. A killed teammate has no live markers, so the runtime
+ * `extras` (last / preview) are empty — the formatters render them as
+ * `-`. The name / repo / worktree / engine come straight from the
+ * archived record, which is enough to drive `tm resume <name>`.
+ *
+ * `liveNames` is the set of names the live `engine.list()` fan-out
+ * already returned; archived entries for those names are dropped so a
+ * re-spawned teammate shows its live row, not a stale killed one.
+ */
+export function archivedListingRows(liveNames: ReadonlySet<string>): TeammateListing[] {
+  return listArchived()
+    .filter((record) => !liveNames.has(record.name))
+    .map((record) => ({
+      name: record.name,
+      engine: record.engine,
+      state: 'killed' as const,
+      repo: record.repo,
+      cwd: record.cwd,
+      worktreeSlug: record.worktreeSlug,
+      displayName: record.displayName,
+      extras: {},
+    }))
 }
 
 export function formatListing(rows: readonly TeammateListing[]): TmResult {

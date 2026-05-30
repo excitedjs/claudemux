@@ -22,11 +22,13 @@ When several teammates are running and you want a one-shot "who's said what":
 | `REPO` | Last path segment of the source repo (`identity.repo`) |
 | `WORKTREE` | Worktree slug (`identity.worktreeSlug`), or `-` for `--no-worktree` teammates |
 | `ENGINE` | `claude` or `codex` |
-| `STATE` | `idle` / `busy` / `unknown`. Known Claude false-negative: TUI-only commands (`/help`, `/effort`, `/agents` dialogs, permission prompts) can fire no hooks, so STATE can read `idle` while the pane is blocked — use `tm status <name>` for ground truth. |
+| `STATE` | `idle` / `busy` / `unknown`, or `killed` for an archived teammate surfaced only by `--all` (see below). Known Claude false-negative: TUI-only commands (`/help`, `/effort`, `/agents` dialogs, permission prompts) can fire no hooks, so STATE can read `idle` while the pane is blocked — use `tm status <name>` for ground truth. |
 | `LAST` | Size and age of the last assistant reply, or `-` if no reply has ended yet |
 | `PREVIEW` | First 50 chars of the last assistant reply, control chars stripped |
 
 Claude `LAST` / `PREVIEW` come from `/tmp/claude-idle/<sid>.last`; Codex reads the current thread's rollout JSONL. `tm states` is cheap enough for fleet scanning and avoids scraping every pane.
+
+Both `tm states` and `tm ls` take `--all` to also list **killed** teammates (`STATE` `killed`, `LAST` / `PREVIEW` `-`) from the kill-time identity archive — use it to find a resumable name after a teammate was killed; see "Picking up that thing from yesterday" below.
 
 ## `tm history` modes
 
@@ -48,9 +50,19 @@ Either way fails if a teammate for `<name>` is already alive (Claude tmux sessio
 
 `--prompt "..."` sends a follow-up after relaunch (atomic, same shape as `tm spawn --prompt`). The resumed teammate keeps its original name.
 
+### Large-session resume startup prompt (suppressed for teammates)
+
+Resuming a big, hours-old Claude session can make Claude Code raise a "Resume from summary (recommended) / Resume full session as-is" startup selection that blocks until a choice is made. It fires when the resumed session is older than `CLAUDE_CODE_RESUME_THRESHOLD_MINUTES` (default 70) **and** larger than `CLAUDE_CODE_RESUME_TOKEN_THRESHOLD` (default 100k tokens). A teammate has no human to answer it, and a `tm send` fired right after resume delivers its Enter onto the selection — mis-picking the default "summary" option (which runs `/compact`) and swallowing both your message and the full context the resume was meant to restore.
+
+Teammates suppress this at launch: `tm spawn` / `tm resume` start the tmux session with `CLAUDE_CODE_RESUME_TOKEN_THRESHOLD` set far above any real context window, so the token condition never trips, the prompt never renders, and a resumed teammate loads its full session silently.
+
+Fallback only: if a future Claude Code build ignores that env knob and the prompt reappears, confirm the REPL is at a normal input box with `tm status <name>` before the next `tm send`. A small or recent session never hits the prompt regardless.
+
 ## Picking up "that thing from yesterday"
 
 User says: "继续昨天那个 X 任务" but the ledger entry is gone (archived, or was never appended).
+
+If you do not even remember the killed teammate's **name**, run `tm ls --all` (or `tm states --all`) first: `tm kill` archives each teammate's identity snapshot, and `--all` lists those killed teammates with `STATE` `killed` alongside the live fleet. Their `NAME` / `REPO` / `WORKTREE` are enough to drive `tm resume <name>` — recovering a killed session without scraping `/tmp/teammate-archive/` by hand. Then:
 
 1. Run `tm history <name>` and survey topics + ages.
 2. Pick the row whose `TOPIC` matches what the user described.

@@ -14,8 +14,13 @@
  */
 
 import type { TmResult } from '../tm'
-import { noEngineRegistered } from './format'
+import { archivedListingRows, noEngineRegistered } from './format'
 import type { VerbContext } from './context'
+
+export interface StatesOptions {
+  /** `--all`: also list killed teammates from the kill-time identity archive. */
+  readonly all: boolean
+}
 
 type StatesRow = readonly [
   string, string, string, string,
@@ -47,13 +52,16 @@ function repoLeaf(path: string): string {
   return leaf.length === 0 ? '-' : leaf
 }
 
-export async function statesVerb(ctx: VerbContext): Promise<TmResult> {
+export async function statesVerb(ctx: VerbContext, opts: StatesOptions): Promise<TmResult> {
   const engines = ctx.engines.registered()
   if (engines.length === 0) return noEngineRegistered()
 
-  const listings = (
+  const live = (
     await Promise.all(engines.map((engine) => engine.list(ctx.engineContext)))
   ).flat()
+  const listings = opts.all
+    ? [...live, ...archivedListingRows(new Set(live.map((row) => row.name)))]
+    : live
 
   if (listings.length === 0) return { code: 0, stdout: '(no teammate sessions)\n', stderr: '' }
 

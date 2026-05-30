@@ -39,8 +39,9 @@ USAGE  (most common first)
   tm kill <name>                         graceful /exit (clean worktree auto-removed);
                                          dirty worktree preserved with stderr note
   tm reload <name>... | --all            fan out /reload-plugins
-  tm ls                                  list teammates (NAME REPO WORKTREE ENGINE STATE)
-  tm states                              rich fleet snapshot
+  tm ls [--all]                          list teammates (NAME REPO WORKTREE ENGINE STATE);
+                                         --all also lists killed teammates (resumable by name)
+  tm states [--all]                      rich fleet snapshot; --all includes killed teammates
   tm ctx <name>... | --all               real ctx-window usage from jsonl
   tm history <name> [<sid/thread-prefix>] inspect past sessions for this teammate
   tm mem <name>                          cat the parent repo's auto-memory index
@@ -70,20 +71,34 @@ ENVIRONMENT
 
 /** Per-verb help text — `tm <verb> --help` and `tm help <verb>` both print this. */
 export const HELP_TEXTS: Readonly<Record<string, string>> = {
-  ls: `tm ls
+  ls: `tm ls [--all]
 
-      List running teammate-<name> sessions. Shows tmux's raw session
-      row (name, window count, attached state). For a richer "who's
-      doing what" view, prefer \`tm states\`.
+      List teammates, one row each: NAME, REPO (last path segment),
+      WORKTREE (slug or '-'), ENGINE (claude / codex), STATE (idle /
+      busy / unknown). The live fleet comes from each engine's session
+      listing. For a richer "who's doing what" view, prefer
+      \`tm states\`.
+
+      --all also lists killed teammates — the identity snapshots
+      \`tm kill\` archives under /tmp/teammate-archive/<name>.json —
+      with STATE 'killed'. Their NAME / REPO / WORKTREE are enough to
+      re-launch with \`tm resume <name>\`, so you recover a killed
+      session without scraping /tmp by hand. A name that is live again
+      shows its live row, not the stale killed one.
 `,
-  states: `tm states
+  states: `tm states [--all]
 
-      One-line fleet snapshot: REPO, SID / thread id (first 8
-      chars), BUSY, LAST (size + age of the last assistant reply),
-      PREVIEW (first 50 chars of that reply). Claude reads
+      Rich fleet snapshot, one row each: NAME, REPO, WORKTREE, ENGINE,
+      STATE, LAST (size + age of the last assistant reply), PREVIEW
+      (first chars of that reply). Claude reads
       /tmp/claude-idle/<sid>.last; Codex reads the current thread's
       rollout JSONL. Use to see what every teammate is doing at a
       glance.
+
+      --all also lists killed teammates (STATE 'killed') from the
+      kill-time identity archive, same as \`tm ls --all\`; their LAST /
+      PREVIEW render as '-' because the live markers are gone. Recover
+      one with \`tm resume <name>\`.
 `,
   spawn: `tm spawn <path> [--name <id>] [--engine claude|codex] [--prompt "..."] [--no-worktree] [--timeout N]
 
@@ -112,6 +127,12 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       useful for repo-wide work where a worktree would be a
       negative-value isolation.
 
+      On a fresh launch the verb prints a \`base:\` line to stderr —
+      the branch + short sha the teammate starts from, plus a
+      best-effort ahead/behind vs the remote default branch. The base
+      is the repo's current HEAD, so a repo parked on a non-trunk
+      branch is visible at a glance rather than a silent surprise.
+
       Without --prompt, the verb returns once the REPL signals
       SessionStart (typically 2-4s on a warm Mac). With
       \`--prompt "..."\`, the verb sleeps 3s after ready, sends the
@@ -126,11 +147,13 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       \`.claude/worktrees/<name>/\` layout; they are not tmux sessions,
       and \`--resume\` / \`--task\` are rejected on that path.
 
-      Every teammate launches with the \`AskUserQuestion\` tool
-      disabled — a teammate runs with no human at its terminal, and
-      that modal would hold the turn open. A teammate raises
-      questions by ending its turn with text, which \`tm send\` /
-      \`tm spawn --prompt\` relays straight back to the dispatcher.
+      Every teammate launches with the \`AskUserQuestion\`,
+      \`EnterPlanMode\`, and \`ExitPlanMode\` tools disabled — a
+      teammate runs with no human at its terminal, and each of those
+      opens a modal that holds the turn open waiting for a person. A
+      teammate raises questions or proposes a plan by ending its turn
+      with text, which \`tm send\` / \`tm spawn --prompt\` relays
+      straight back to the dispatcher.
 
       Exit codes on the \`--prompt\` sync path:
         0   first-turn reply
@@ -259,6 +282,18 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       AskUserQuestion tool disabled (see 'tm help spawn' for why): a
       resumed teammate raises questions by ending its turn with
       text, not by opening a modal.
+
+      Large-session startup prompt: resuming a big, hours-old Claude
+      session can make Claude Code raise a "Resume from summary
+      (recommended) / Resume full session as-is" startup selection
+      that waits for a choice — and a teammate has no human to answer
+      it. Teammates suppress it: 'tm spawn' / 'tm resume' launch with
+      CLAUDE_CODE_RESUME_TOKEN_THRESHOLD set far above any real window,
+      so the prompt never renders and the full session loads silently.
+      Fallback only — if a future Claude Code build ignores that knob
+      and the prompt reappears, confirm the REPL is at a normal input
+      box with 'tm status <name>' before the next 'tm send' (a blind
+      send's Enter would pick the summary and discard context).
 `,
   last: `tm last <name> [--verbose]
 

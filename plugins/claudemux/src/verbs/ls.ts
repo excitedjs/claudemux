@@ -11,17 +11,24 @@
  * the row shape, not the verb.
  */
 
-import { formatListing, noEngineRegistered } from './format'
+import { archivedListingRows, formatListing, noEngineRegistered } from './format'
 import type { VerbContext } from './context'
 import type { TmResult } from '../tm'
 
-export async function lsVerb(ctx: VerbContext): Promise<TmResult> {
+export interface LsOptions {
+  /** `--all`: also list killed teammates from the kill-time identity archive. */
+  readonly all: boolean
+}
+
+export async function lsVerb(ctx: VerbContext, opts: LsOptions): Promise<TmResult> {
   // An empty registry means production wiring is incomplete — the verb must
   // surface that loudly, not silently report "no teammates". A zero-engine
   // process is a misconfiguration, not a fleet state.
   const engines = ctx.engines.registered()
   if (engines.length === 0) return noEngineRegistered()
 
-  const listings = await Promise.all(engines.map((engine) => engine.list(ctx.engineContext)))
-  return formatListing(listings.flat())
+  const live = (await Promise.all(engines.map((engine) => engine.list(ctx.engineContext)))).flat()
+  if (!opts.all) return formatListing(live)
+  const liveNames = new Set(live.map((row) => row.name))
+  return formatListing([...live, ...archivedListingRows(liveNames)])
 }

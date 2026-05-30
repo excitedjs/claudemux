@@ -277,7 +277,13 @@ export type TextResult =
 export interface TeammateListing {
   readonly name: TeammateName
   readonly engine: EngineKind
-  readonly state: 'idle' | 'busy' | 'unknown'
+  /**
+   * Live turn state from the hook markers, or `killed` for an archived
+   * record surfaced by `tm ls --all` / `tm states --all` — that
+   * teammate has no live process; its identity snapshot survives kill
+   * so it stays resumable by name.
+   */
+  readonly state: 'idle' | 'busy' | 'unknown' | 'killed'
   /** Physical repo path the teammate is bound to. */
   readonly repo: string
   /** Runtime working directory (worktree path or `repo`). */

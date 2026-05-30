@@ -30,6 +30,7 @@ import {
   archivedIdentityFile,
   identityFile,
   list,
+  listArchived,
   read,
   readArchived,
   remove,
@@ -147,5 +148,65 @@ describe('identity-store archive', () => {
     archive('beta')
 
     expect(readArchived('beta')).toEqual(record)
+  })
+})
+
+describe('identity-store listArchived — discovery of killed teammates', () => {
+  // Helper: kill a teammate (reserve → archive → remove), leaving only
+  // its archive snapshot — the post-`tm kill` on-disk state.
+  function killAfterReserve(record: TeammateRecordJson): void {
+    expect(reserve(record).kind).toBe('reserved')
+    archive(record.name)
+    remove(record.name)
+  }
+
+  test('returns an empty list when nothing has ever been killed', () => {
+    expect(listArchived()).toEqual([])
+  })
+
+  test('lists every archived record, regardless of engine', () => {
+    killAfterReserve(sampleRecord({ name: 'killed-claude', engine: 'claude' }))
+    killAfterReserve(sampleRecord({ name: 'killed-codex', engine: 'codex' }))
+
+    const names = listArchived().map((r) => r.name).sort()
+    expect(names).toEqual(['killed-claude', 'killed-codex'])
+  })
+
+  test('does not surface live records — only the archive directory is read', () => {
+    // A live teammate that was never killed has no archive snapshot.
+    expect(reserve(sampleRecord({ name: 'live-only' })).kind).toBe('reserved')
+    expect(listArchived()).toEqual([])
+  })
+
+  test('an archived record round-trips its launch context for resume', () => {
+    killAfterReserve(
+      sampleRecord({
+        name: 'gamma',
+        repo: '/srv/code/flow',
+        cwd: '/srv/code/flow/.claude/worktrees/gamma',
+        worktreeSlug: 'gamma',
+        displayName: 'Gamma',
+      }),
+    )
+    const [row] = listArchived()
+    expect(row).toMatchObject({
+      name: 'gamma',
+      repo: '/srv/code/flow',
+      cwd: '/srv/code/flow/.claude/worktrees/gamma',
+      worktreeSlug: 'gamma',
+      displayName: 'Gamma',
+    })
+  })
+
+  test('skips unparseable and schema-mismatched archive files', () => {
+    killAfterReserve(sampleRecord({ name: 'good' }))
+    // Garbage JSON and a legacy schema=1 record both land in the archive
+    // dir; neither should be returned as a teammate.
+    writeFileSync(archivedIdentityFile('broken'), '{ not json')
+    writeFileSync(
+      archivedIdentityFile('legacy'),
+      JSON.stringify({ ...sampleRecord({ name: 'legacy' }), schema: 1 }) + '\n',
+    )
+    expect(listArchived().map((r) => r.name)).toEqual(['good'])
   })
 })
