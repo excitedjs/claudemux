@@ -18,8 +18,13 @@ concurrency:
   group: claudemux-release-${{ github.ref_name }}
   cancel-in-progress: false
 
+# contents: write — the release job commits and pushes the version bump.
+# id-token: write — OIDC token for the publish job's npm trusted publishing.
+#   It is declared here at the workflow level, not only on the publish job, so
+#   the token actually carries id-token: write at run time.
 permissions:
   contents: write
+  id-token: write
 
 # The bot commits and pushes its own version bump. Husky's local pre-push hook
 # runs `changeset status`, which misfires on that commit (the bump touches a
