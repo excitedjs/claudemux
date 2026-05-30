@@ -67,6 +67,28 @@ Pure-docs commits (README, `CLAUDE.md`, KB files, any `*.md` that is not a
 **exempt**. The `.agents/` KB is not a feature-class path — KB changes never
 need a changeset.
 
+## npm publishing — OIDC trusted publishing
+
+`claudemux-release.yml` has a second job, `publish`, that ships the `tm` CLI to
+npm as `@excitedjs/tm` after a stable/beta release commit lands. It uses **OIDC
+trusted publishing**: `npm publish --provenance` authenticates via the GitHub
+Actions OIDC token (`id-token: write`), so no long-lived npm token is stored as
+a secret. npmjs.com must list this workflow as the package's trusted publisher.
+
+Three in-repo preconditions must all hold, or the publish fails with a different
+misleading error each time (`E404` / `ENEEDAUTH` / `E422`):
+
+- the publish job's `setup-node` carries **no `registry-url`** — the registry is
+  pinned on the `npm publish --registry=…` command instead, because
+  `registry-url` writes an `.npmrc` auth token that suppresses the OIDC handshake;
+- **`id-token: write` is granted at the workflow-level `permissions`**, not only
+  on the publish job, because a job cannot add a scope the workflow level omits;
+- **`plugins/claudemux/package.json` carries a `repository` field** matching the
+  source repo, which npm provenance verification checks against the OIDC bundle.
+
+The symptom → cause → fix for each, with the failing run that revealed it, is in
+[decision npm-oidc-trusted-publishing](/.agents/decisions/npm-oidc-trusted-publishing.md).
+
 ## Local hooks
 
 The repo uses Husky (`/.husky/`) for local git hooks, installed automatically
@@ -139,4 +161,5 @@ jobs:
 
 - [decisions/tm-quality-hardening.md](/.agents/decisions/tm-quality-hardening.md) — how CI, tests, and the lint hooks were introduced.
 - [decisions/changeset-release-versioning.md](/.agents/decisions/changeset-release-versioning.md) — why versioning moved to Changesets fragments with direct-push beta/GA automation.
+- [decisions/npm-oidc-trusted-publishing.md](/.agents/decisions/npm-oidc-trusted-publishing.md) — the three OIDC trusted-publishing preconditions for the npm `publish` job.
 - [components/tm.md](/.agents/components/tm.md) — what shellcheck and the bats suite guard.

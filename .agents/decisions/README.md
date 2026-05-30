@@ -47,6 +47,7 @@ record kept for history — open it and follow its Status link to the current on
 
 **Release, quality & testing**
 - [changeset-release-versioning](/.agents/decisions/changeset-release-versioning.md) — versioning via changeset fragments consumed by a release step
+- [npm-oidc-trusted-publishing](/.agents/decisions/npm-oidc-trusted-publishing.md) — `@excitedjs/tm` publishes to npm via OIDC trusted publishing; three in-repo preconditions each break it with a different misleading error
 - [tm-quality-hardening](/.agents/decisions/tm-quality-hardening.md) — CI, bats tests, lint, shared path/encoding helpers
 - [live-teammate-integration-harness](/.agents/decisions/live-teammate-integration-harness.md) — live-teammate integration tests + directory-trust seeding
 
@@ -83,6 +84,7 @@ never collide on a sequence number.
 | [multi-engine-tui-architecture](/.agents/decisions/multi-engine-tui-architecture.md) | The Node core is reshaped around an `Engine` interface, a single per-teammate JSON record, and an `engines/<kind>/` layout so a third TUI slots in without forking the verb layer | Accepted |
 | [node-cli-committed-bundle](/.agents/decisions/node-cli-committed-bundle.md) | `tm` ships as a committed esbuild bundle + thin Node launcher | Superseded by [zero-install-type-stripping](/.agents/decisions/zero-install-type-stripping.md) |
 | [node-cli-orchestrator](/.agents/decisions/node-cli-orchestrator.md) | The 1.0 line retires the MCP-native core for a pure Node `tm` CLI | Accepted |
+| [npm-oidc-trusted-publishing](/.agents/decisions/npm-oidc-trusted-publishing.md) | `@excitedjs/tm` publishes to npm via OIDC trusted publishing; three in-repo preconditions (no setup-node `registry-url`, workflow-level `id-token: write`, a `repository` field) each break publishing with a different misleading error | Accepted |
 | [research-hazard-dispositions](/.agents/decisions/research-hazard-dispositions.md) | Every research hazard reaches a recorded disposition before it leaves the research layer | Accepted |
 | [teammates-launch-without-askuserquestion](/.agents/decisions/teammates-launch-without-askuserquestion.md) | Teammates launch with the `AskUserQuestion` tool disabled | Accepted |
 | [tm-quality-hardening](/.agents/decisions/tm-quality-hardening.md) | `tm` was hardened with CI, bats tests, lint, and shared path/encoding helpers | Accepted |
