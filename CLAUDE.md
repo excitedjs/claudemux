@@ -73,7 +73,7 @@ For claudemux, a feature commit does **not** edit the `version` field. It declar
 
 ```markdown
 ---
-"claudemux": patch
+"@excitedjs/tm": patch
 ---
 
 <one-paragraph description>
@@ -89,9 +89,9 @@ The version is bumped only by the release pipeline. Official Changesets consumes
 
 Release-surface paths are declared in `.changeset/config.json` under `changedFilePatterns`:
 
-- `bin/*`, `hooks/*`, `scripts/*`, `templates/*` (claudemux)
-- `skills/*/SKILL.md` (claudemux)
-- `src/**`, `third_party/**`, `resolver.mjs`, `resolver-register.mjs`, `package.json` (claudemux)
+- `bin/*`, `hooks/*`, `scripts/*`, `templates/*` (claudemux — use package name `"@excitedjs/tm"`)
+- `skills/*/SKILL.md` (claudemux — use package name `"@excitedjs/tm"`)
+- `src/**`, `third_party/**`, `resolver.mjs`, `resolver-register.mjs`, `package.json` (claudemux — use package name `"@excitedjs/tm"`)
 - `src/**` (feishu-channel — use package name `"claude-channel-feishu"`)
 
 Two local hooks run via Husky (installed by `pnpm install`):

@@ -1,8 +1,7 @@
 {
-  "name": "claudemux",
-  "version": "1.0.0",
-  "description": "Multi-repo Claude Code orchestrator — `tm` CLI plus the dispatcher skill, hooks, and templates the plugin ships.",
-  "private": true,
+  "name": "@excitedjs/tm",
+  "version": "1.1.0",
+  "description": "Multi-repo AI orchestrator CLI — spawn, message, and wait on Claude/Codex teammates across sibling repos.",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -11,6 +10,16 @@
   "imports": {
     "#ws": "./third_party/ws/wrapper.mjs"
   },
+  "bin": {
+    "tm": "./bin/tm"
+  },
+  "files": [
+    "bin/tm",
+    "src/",
+    "resolver.mjs",
+    "resolver-register.mjs",
+    "third_party/ws/"
+  ],
   "scripts": {
     "changeset": "changeset",
     "version-packages": "changeset version && node scripts/sync-plugin-version.mjs",
