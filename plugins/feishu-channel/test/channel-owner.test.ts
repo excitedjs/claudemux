@@ -31,12 +31,16 @@ describe('ChannelOwnerState', () => {
     expect(owner.select(new Set([tm, dispatcher]))).toBe(dispatcher)
   })
 
-  test('a teammate can acquire the channel and then return it to dispatcher', async () => {
+  test('a teammate can acquire a dispatcher grant and then return it to dispatcher', async () => {
     const owner = new ChannelOwnerState()
     const dispatcher = fakeConn(session('dispatcher-1', 'dispatcher'))
     const tm = fakeConn(session('tm-1', 'session'))
     const conns = new Set([dispatcher, tm])
     owner.register(dispatcher)
+
+    const granted = await owner.handleTool(dispatcher, 'feishu_channel_grant', { session_id: 'tm-1' }, conns)
+    expect(granted.handled).toBe(true)
+    if (granted.handled) expect(text(granted.result)).toContain('tm-1')
 
     const acquired = await owner.handleTool(tm, 'feishu_channel_acquire', {}, conns)
     expect(acquired.handled).toBe(true)
@@ -61,6 +65,35 @@ describe('ChannelOwnerState', () => {
     expect(owner.select(conns)).toBe(tm)
   })
 
+  test('ordinary sessions cannot acquire without a dispatcher grant', async () => {
+    const owner = new ChannelOwnerState()
+    const dispatcher = fakeConn(session('dispatcher-1', 'dispatcher'))
+    const tm = fakeConn(session('tm-1', 'session'))
+    const conns = new Set([dispatcher, tm])
+    owner.register(dispatcher)
+
+    const result = await owner.handleTool(tm, 'feishu_channel_acquire', {}, conns)
+
+    expect(result.handled).toBe(true)
+    if (result.handled) expect(result.result.isError).toBe(true)
+    expect(owner.select(conns)).toBe(dispatcher)
+  })
+
+  test('ordinary sessions cannot grant ownership', async () => {
+    const owner = new ChannelOwnerState()
+    const dispatcher = fakeConn(session('dispatcher-1', 'dispatcher'))
+    const tmA = fakeConn(session('tm-a', 'session'))
+    const tmB = fakeConn(session('tm-b', 'session'))
+    const conns = new Set([dispatcher, tmA, tmB])
+    owner.register(dispatcher)
+
+    const result = await owner.handleTool(tmA, 'feishu_channel_grant', { session_id: 'tm-b' }, conns)
+
+    expect(result.handled).toBe(true)
+    if (result.handled) expect(result.result.isError).toBe(true)
+    expect(owner.select(conns)).toBe(dispatcher)
+  })
+
   test('ordinary sessions cannot assign ownership to another session', async () => {
     const owner = new ChannelOwnerState()
     const dispatcher = fakeConn(session('dispatcher-1', 'dispatcher'))
@@ -81,7 +114,7 @@ describe('ChannelOwnerState', () => {
     const dispatcher = fakeConn(session('dispatcher-1', 'dispatcher'))
     const tm = fakeConn(session('tm-1', 'session'))
     owner.register(dispatcher)
-    await owner.handleTool(tm, 'feishu_channel_acquire', {}, new Set([dispatcher, tm]))
+    await owner.handleTool(dispatcher, 'feishu_channel_acquire', { session_id: 'tm-1' }, new Set([dispatcher, tm]))
 
     expect(owner.select(new Set([dispatcher]))).toBeNull()
   })
@@ -91,7 +124,7 @@ describe('ChannelOwnerState', () => {
     const dispatcher = fakeConn(session('dispatcher-1', 'dispatcher'))
     const tm = fakeConn(session('tm-1', 'session'))
     owner.register(dispatcher)
-    await owner.handleTool(tm, 'feishu_channel_acquire', {}, new Set([dispatcher, tm]))
+    await owner.handleTool(dispatcher, 'feishu_channel_acquire', { session_id: 'tm-1' }, new Set([dispatcher, tm]))
 
     const reclaimed = await owner.handleTool(dispatcher, 'feishu_channel_reclaim', {}, new Set([dispatcher]))
 
@@ -106,7 +139,7 @@ describe('ChannelOwnerState', () => {
     const tmA = fakeConn(session('tm-a', 'session'))
     const tmB = fakeConn(session('tm-b', 'session'))
     owner.register(dispatcher)
-    await owner.handleTool(tmA, 'feishu_channel_acquire', {}, new Set([dispatcher, tmA, tmB]))
+    await owner.handleTool(dispatcher, 'feishu_channel_acquire', { session_id: 'tm-a' }, new Set([dispatcher, tmA, tmB]))
 
     const result = await owner.handleTool(tmB, 'feishu_channel_reclaim', {}, new Set([dispatcher, tmB]))
 
@@ -120,7 +153,7 @@ describe('ChannelOwnerState', () => {
     const dispatcher = fakeConn(session('dispatcher-1', 'dispatcher'))
     const tm = fakeConn(session('tm-1', 'session'))
     owner.register(dispatcher)
-    await owner.handleTool(tm, 'feishu_channel_acquire', {}, new Set([dispatcher, tm]))
+    await owner.handleTool(dispatcher, 'feishu_channel_acquire', { session_id: 'tm-1' }, new Set([dispatcher, tm]))
 
     const status = await owner.handleTool(dispatcher, 'feishu_channel_status', {}, new Set([dispatcher, tm]))
 

@@ -3,8 +3,9 @@
  *
  * The Feishu long connection is global, but the Claude-facing owner of inbound
  * messages is explicit state controlled through MCP tools. Dispatcher is the
- * default owner; a teammate can acquire the channel, then return it to the
- * dispatcher. Ordinary proxy registration order must not decide ownership.
+ * default owner; it can hand the channel to a teammate, and that teammate can
+ * return it to the dispatcher. Ordinary proxy registration order must not
+ * decide ownership.
  */
 
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js'
@@ -19,16 +20,31 @@ export const CHANNEL_OWNER_TOOLS: Tool[] = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'feishu_channel_grant',
+    description:
+      'Allow one live teammate session to acquire inbound Feishu channel delivery. Dispatcher-only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: {
+          type: 'string',
+          description: 'Live teammate proxy session_id that may call feishu_channel_acquire.',
+        },
+      },
+      required: ['session_id'],
+    },
+  },
+  {
     name: 'feishu_channel_acquire',
     description:
-      'Acquire inbound Feishu channel delivery for this session, or for a specific live session_id when called by the dispatcher.',
+      'Acquire inbound Feishu channel delivery. Dispatcher may assign a live session_id directly; ordinary sessions need a dispatcher grant.',
     inputSchema: {
       type: 'object',
       properties: {
         session_id: {
           type: 'string',
           description:
-            'Optional live proxy session_id to assign as owner. Only the dispatcher should pass this; otherwise ownership moves to the calling session.',
+            'Optional live proxy session_id to assign as owner. Dispatcher-only; ordinary sessions acquire only themselves when granted.',
         },
       },
     },
@@ -54,6 +70,7 @@ export type OwnershipToolResult =
 export class ChannelOwnerState {
   #ownerSessionId: string | undefined
   #dispatcherSessionId: string | undefined
+  #grantedSessionId: string | undefined
   #leaseEpoch = 0
 
   constructor(private readonly onChanged: () => void = () => {}) {}
@@ -95,6 +112,29 @@ export class ChannelOwnerState {
     switch (name) {
       case 'feishu_channel_status':
         return { handled: true, result: toolJson(this.status(connections)) }
+      case 'feishu_channel_grant': {
+        const callerSession = caller.session
+        if (!callerSession) return { handled: true, result: toolText('channel proxy is not registered', true) }
+        if (callerSession.role !== 'dispatcher') {
+          return { handled: true, result: toolText('only the dispatcher may grant channel ownership', true) }
+        }
+        const requested = typeof args.session_id === 'string' && args.session_id.length > 0
+          ? args.session_id
+          : undefined
+        if (!requested) return { handled: true, result: toolText('session_id is required', true) }
+        const target = [...connections].find((conn) => conn.session?.sessionId === requested)
+        if (!target?.session) {
+          return { handled: true, result: toolText(`no live channel proxy session: ${requested}`, true) }
+        }
+        if (target.session.role === 'dispatcher') {
+          return { handled: true, result: toolText('dispatcher already owns the default channel target', true) }
+        }
+        this.#grantedSessionId = target.session.sessionId
+        return {
+          handled: true,
+          result: toolText(`Feishu channel acquire grant issued to ${target.session.sessionId}.`),
+        }
+      }
       case 'feishu_channel_acquire': {
         const callerSession = caller.session
         if (!callerSession) return { handled: true, result: toolText('channel proxy is not registered', true) }
@@ -105,13 +145,20 @@ export class ChannelOwnerState {
         if (!target?.session) {
           return { handled: true, result: toolText(`no live channel proxy session: ${requested}`, true) }
         }
-        if (requested !== callerSession.sessionId && callerSession.role !== 'dispatcher') {
+        if (callerSession.role !== 'dispatcher' && requested !== callerSession.sessionId) {
           return {
             handled: true,
             result: toolText('only the dispatcher may assign channel ownership to another session', true),
           }
         }
+        if (callerSession.role !== 'dispatcher' && this.#grantedSessionId !== callerSession.sessionId) {
+          return {
+            handled: true,
+            result: toolText('channel ownership was not granted by the dispatcher', true),
+          }
+        }
         this.setOwner(target.session.sessionId)
+        if (this.#grantedSessionId === target.session.sessionId) this.#grantedSessionId = undefined
         this.onChanged()
         return {
           handled: true,
@@ -121,11 +168,20 @@ export class ChannelOwnerState {
         }
       }
       case 'feishu_channel_return_to_dispatcher': {
+        const callerSession = caller.session
+        if (!callerSession) return { handled: true, result: toolText('channel proxy is not registered', true) }
+        if (callerSession.role !== 'dispatcher' && callerSession.sessionId !== this.#ownerSessionId) {
+          return {
+            handled: true,
+            result: toolText('only the current owner may return the channel to dispatcher', true),
+          }
+        }
         const dispatcher = this.currentDispatcher(connections)
         if (!dispatcher?.session) {
           return { handled: true, result: toolText('no live dispatcher channel proxy is registered', true) }
         }
         this.setOwner(dispatcher.session.sessionId)
+        this.#grantedSessionId = undefined
         this.onChanged()
         return {
           handled: true,
@@ -145,6 +201,7 @@ export class ChannelOwnerState {
           return { handled: true, result: toolText('no live dispatcher channel proxy is registered', true) }
         }
         this.setOwner(dispatcher.session.sessionId)
+        this.#grantedSessionId = undefined
         this.onChanged()
         return {
           handled: true,
@@ -165,6 +222,7 @@ export class ChannelOwnerState {
     return {
       owner_session_id: this.#ownerSessionId ?? null,
       dispatcher_session_id: this.#dispatcherSessionId ?? null,
+      granted_session_id: this.#grantedSessionId ?? null,
       effective_target_session_id: this.select(connections)?.session?.sessionId ?? null,
       lease_epoch: this.#leaseEpoch,
       sessions,
