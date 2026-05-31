@@ -39,6 +39,12 @@ export const CHANNEL_OWNER_TOOLS: Tool[] = [
       'Return inbound Feishu channel delivery to the current dispatcher session.',
     inputSchema: { type: 'object', properties: {} },
   },
+  {
+    name: 'feishu_channel_reclaim',
+    description:
+      'Force reclaim inbound Feishu channel delivery back to the dispatcher. Dispatcher-only recovery path for a dead owner session.',
+    inputSchema: { type: 'object', properties: {} },
+  },
 ]
 
 export type OwnershipToolResult =
@@ -48,6 +54,7 @@ export type OwnershipToolResult =
 export class ChannelOwnerState {
   #ownerSessionId: string | undefined
   #dispatcherSessionId: string | undefined
+  #leaseEpoch = 0
 
   constructor(private readonly onChanged: () => void = () => {}) {}
 
@@ -60,7 +67,7 @@ export class ChannelOwnerState {
     this.#dispatcherSessionId = session.sessionId
 
     if (this.#ownerSessionId === undefined || this.#ownerSessionId === previousDispatcher) {
-      this.#ownerSessionId = session.sessionId
+      this.setOwner(session.sessionId)
       this.onChanged()
     }
   }
@@ -70,6 +77,7 @@ export class ChannelOwnerState {
     if (this.#ownerSessionId) {
       const owner = live.find((conn) => conn.session?.sessionId === this.#ownerSessionId)
       if (owner) return owner
+      return null
     }
     if (this.#dispatcherSessionId) {
       const dispatcher = live.find((conn) => conn.session?.sessionId === this.#dispatcherSessionId)
@@ -103,11 +111,13 @@ export class ChannelOwnerState {
             result: toolText('only the dispatcher may assign channel ownership to another session', true),
           }
         }
-        this.#ownerSessionId = target.session.sessionId
+        this.setOwner(target.session.sessionId)
         this.onChanged()
         return {
           handled: true,
-          result: toolText(`Feishu channel owner is now ${target.session.sessionId} (${target.session.role}).`),
+          result: toolText(
+            `Feishu channel owner is now ${target.session.sessionId} (${target.session.role}, epoch ${this.#leaseEpoch}).`,
+          ),
         }
       }
       case 'feishu_channel_return_to_dispatcher': {
@@ -115,11 +125,32 @@ export class ChannelOwnerState {
         if (!dispatcher?.session) {
           return { handled: true, result: toolText('no live dispatcher channel proxy is registered', true) }
         }
-        this.#ownerSessionId = dispatcher.session.sessionId
+        this.setOwner(dispatcher.session.sessionId)
         this.onChanged()
         return {
           handled: true,
-          result: toolText(`Feishu channel owner returned to dispatcher ${dispatcher.session.sessionId}.`),
+          result: toolText(
+            `Feishu channel owner returned to dispatcher ${dispatcher.session.sessionId} (epoch ${this.#leaseEpoch}).`,
+          ),
+        }
+      }
+      case 'feishu_channel_reclaim': {
+        const callerSession = caller.session
+        if (!callerSession) return { handled: true, result: toolText('channel proxy is not registered', true) }
+        if (callerSession.role !== 'dispatcher') {
+          return { handled: true, result: toolText('only the dispatcher may reclaim channel ownership', true) }
+        }
+        const dispatcher = this.currentDispatcher(connections)
+        if (!dispatcher?.session) {
+          return { handled: true, result: toolText('no live dispatcher channel proxy is registered', true) }
+        }
+        this.setOwner(dispatcher.session.sessionId)
+        this.onChanged()
+        return {
+          handled: true,
+          result: toolText(
+            `Feishu channel owner reclaimed by dispatcher ${dispatcher.session.sessionId} (epoch ${this.#leaseEpoch}).`,
+          ),
         }
       }
       default:
@@ -135,6 +166,7 @@ export class ChannelOwnerState {
       owner_session_id: this.#ownerSessionId ?? null,
       dispatcher_session_id: this.#dispatcherSessionId ?? null,
       effective_target_session_id: this.select(connections)?.session?.sessionId ?? null,
+      lease_epoch: this.#leaseEpoch,
       sessions,
     }
   }
@@ -142,6 +174,12 @@ export class ChannelOwnerState {
   private currentDispatcher(connections: ReadonlySet<DaemonConnection>): DaemonConnection | null {
     if (!this.#dispatcherSessionId) return null
     return [...connections].find((conn) => conn.session?.sessionId === this.#dispatcherSessionId) ?? null
+  }
+
+  private setOwner(sessionId: string): void {
+    if (this.#ownerSessionId === sessionId) return
+    this.#ownerSessionId = sessionId
+    this.#leaseEpoch += 1
   }
 }
 
