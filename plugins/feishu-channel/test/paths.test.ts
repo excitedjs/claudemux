@@ -25,7 +25,7 @@ describe('paths', () => {
     expect(lockFile(base)).toBe(join(base, 'connection.lock'))
     expect(daemonSocketFile(base)).toBe(join(base, 'daemon.sock'))
     expect(daemonLockFile(base)).toBe(join(base, 'daemon.lock'))
-    expect(daemonInboundQueueFile(base)).toBe(join(base, 'daemon-inbound-queue.json'))
+    expect(daemonInboundQueueFile(base)).toBe(join(base, 'daemon-inbound-queue.jsonl'))
   })
 
   test('every state file sits inside the state directory', () => {

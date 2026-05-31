@@ -6,9 +6,14 @@
  * delivered after the proxy ACKs the Claude-facing notification write. This
  * intentionally gives at-least-once delivery to Claude: a crash between render
  * and ACK can replay the row, but an ACKed-before-persist loss is not possible.
+ *
+ * The file is append-only JSONL, not read-modify-write JSON. Handoff briefly has
+ * two daemon generations with two Feishu WS clients; Feishu randomly routes
+ * each event to one client, so both daemons must be able to append received
+ * facts to the same durable queue without a last-writer-wins rename race.
  */
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 export interface InboundQueueRow {
@@ -20,10 +25,16 @@ export interface InboundQueueRow {
   deliveredAt?: number
 }
 
-interface QueueFile {
-  version: 1
-  rows: InboundQueueRow[]
-}
+type QueueEvent =
+  | {
+      t: 'received'
+      eventId: string
+      content: string
+      meta: Record<string, string>
+      receivedAt: number
+      byGeneration: number
+    }
+  | { t: 'delivered'; eventId: string; deliveredAt: number }
 
 export interface InboundQueue {
   enqueue(row: InboundQueueRow): void
@@ -35,67 +46,71 @@ export interface InboundQueue {
 export function openInboundQueue(path: string): InboundQueue {
   return {
     enqueue(row) {
-      const file = readQueue(path)
-      if (file.rows.some((r) => r.eventId === row.eventId)) return
-      file.rows.push(row)
-      writeQueue(path, file)
+      if (readRows(path).some((r) => r.eventId === row.eventId)) return
+      appendEvent(path, { t: 'received', ...row })
     },
 
     markDelivered(eventId, deliveredAt) {
-      const file = readQueue(path)
-      const row = file.rows.find((r) => r.eventId === eventId)
+      const row = readRows(path).find((r) => r.eventId === eventId)
       if (!row || row.deliveredAt !== undefined) return
-      row.deliveredAt = deliveredAt
-      writeQueue(path, file)
+      appendEvent(path, { t: 'delivered', eventId, deliveredAt })
     },
 
     pending() {
-      return readQueue(path).rows.filter((r) => r.deliveredAt === undefined)
+      return readRows(path).filter((r) => r.deliveredAt === undefined)
     },
 
     all() {
-      return readQueue(path).rows
+      return readRows(path)
     },
   }
 }
 
-function readQueue(path: string): QueueFile {
+function readRows(path: string): InboundQueueRow[] {
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown
-    if (isQueueFile(parsed)) return parsed
+    const rows = new Map<string, InboundQueueRow>()
+    for (const [idx, line] of readFileSync(path, 'utf8').split('\n').entries()) {
+      if (line.trim() === '') continue
+      const parsed = JSON.parse(line) as unknown
+      if (!isQueueEvent(parsed)) {
+        throw new Error(`invalid daemon inbound queue event at line ${idx + 1}: ${path}`)
+      }
+      if (parsed.t === 'received') {
+        if (rows.has(parsed.eventId)) continue
+        rows.set(parsed.eventId, {
+          eventId: parsed.eventId,
+          content: parsed.content,
+          meta: parsed.meta,
+          receivedAt: parsed.receivedAt,
+          byGeneration: parsed.byGeneration,
+        })
+      } else {
+        const row = rows.get(parsed.eventId)
+        if (row && row.deliveredAt === undefined) row.deliveredAt = parsed.deliveredAt
+      }
+    }
+    return [...rows.values()]
   } catch (err) {
     const e = err as NodeJS.ErrnoException
-    if (e.code === 'ENOENT') return { version: 1, rows: [] }
+    if (e.code === 'ENOENT') return []
     throw err
   }
-  throw new Error(`invalid daemon inbound queue: ${path}`)
 }
 
-function writeQueue(path: string, file: QueueFile): void {
+function appendEvent(path: string, event: QueueEvent): void {
   mkdirSync(dirname(path), { recursive: true })
-  const tmp = `${path}.${process.pid}.tmp`
-  writeFileSync(tmp, `${JSON.stringify(file, null, 2)}\n`, 'utf8')
-  renameSync(tmp, path)
+  appendFileSync(path, `${JSON.stringify(event)}\n`, { encoding: 'utf8', flag: 'a' })
 }
 
-function isQueueFile(value: unknown): value is QueueFile {
+function isQueueEvent(value: unknown): value is QueueEvent {
+  if (!isRecord(value) || typeof value.eventId !== 'string') return false
+  if (value.t === 'delivered') return typeof value.deliveredAt === 'number'
   return (
-    isRecord(value) &&
-    value.version === 1 &&
-    Array.isArray(value.rows) &&
-    value.rows.every(isQueueRow)
-  )
-}
-
-function isQueueRow(value: unknown): value is InboundQueueRow {
-  return (
-    isRecord(value) &&
-    typeof value.eventId === 'string' &&
+    value.t === 'received' &&
     typeof value.content === 'string' &&
     isStringRecord(value.meta) &&
     typeof value.receivedAt === 'number' &&
-    typeof value.byGeneration === 'number' &&
-    (value.deliveredAt === undefined || typeof value.deliveredAt === 'number')
+    typeof value.byGeneration === 'number'
   )
 }
 

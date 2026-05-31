@@ -47,7 +47,7 @@ export function daemonLockFile(base: string = stateDir()): string {
 }
 
 export function daemonInboundQueueFile(base: string = stateDir()): string {
-  return join(base, 'daemon-inbound-queue.json')
+  return join(base, 'daemon-inbound-queue.jsonl')
 }
 
 /**
