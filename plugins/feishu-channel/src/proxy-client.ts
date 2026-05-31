@@ -13,7 +13,7 @@
  * the fix for the #10 fire-and-forget loss.
  */
 
-import type { DaemonToProxy, ProxyToDaemon } from './ipc.js'
+import type { DaemonToProxy, ProxyToDaemon } from './ipc'
 
 export interface ProxyClientDeps {
   /** Identity sent in `register`. */

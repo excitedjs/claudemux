@@ -62,12 +62,12 @@ export function encodeFrame(message: IpcMessage): Buffer {
  * claims to exceed `MAX_FRAME_BYTES` (corrupt/hostile stream) so the caller can
  * drop the connection rather than buffer unboundedly.
  */
-export class FrameDecoder {
+export class FrameDecoder<T extends IpcMessage = IpcMessage> {
   #buffer: Buffer = Buffer.alloc(0)
 
-  push(chunk: Buffer): IpcMessage[] {
+  push(chunk: Buffer): T[] {
     this.#buffer = this.#buffer.length === 0 ? chunk : Buffer.concat([this.#buffer, chunk])
-    const out: IpcMessage[] = []
+    const out: T[] = []
     while (this.#buffer.length >= FRAME_HEADER_BYTES) {
       const len = this.#buffer.readUInt32BE(0)
       if (len > MAX_FRAME_BYTES) {
@@ -76,7 +76,8 @@ export class FrameDecoder {
       const total = FRAME_HEADER_BYTES + len
       if (this.#buffer.length < total) break // wait for the rest of this frame
       const payload = this.#buffer.subarray(FRAME_HEADER_BYTES, total)
-      out.push(JSON.parse(payload.toString('utf8')) as IpcMessage)
+      // The stream carries one direction, so the caller parameterizes T.
+      out.push(JSON.parse(payload.toString('utf8')) as T)
       this.#buffer = this.#buffer.subarray(total)
     }
     return out

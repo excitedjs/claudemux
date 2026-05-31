@@ -8,7 +8,7 @@
  * in-memory pipe, with the OS socket/lifecycle a thin wrapper added separately.
  */
 
-import type { DaemonToProxy, ProxyToDaemon } from './ipc.js'
+import type { DaemonToProxy, ProxyToDaemon } from './ipc'
 
 /** The slice of the channel core the daemon needs to run a forwarded tool call. */
 export interface DaemonCore {
