@@ -13,3 +13,6 @@ The plugin entrypoint now starts as a thin MCP stdio proxy and lazily spawns the
 standing daemon when the daemon socket is absent. The daemon owns the sole Feishu
 WebSocket and opens the transport without the legacy per-session instance lock,
 so ordinary Claude sessions no longer contend for the channel connection.
+
+Adds the handoff skill documenting how Dispatcher and teammate sessions inspect,
+grant, acquire, return, and reclaim explicit Feishu channel delivery ownership.

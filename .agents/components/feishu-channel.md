@@ -87,7 +87,7 @@ for the rationale.
 | `commands/configure.md` | The `/feishu-channel:configure` slash command |
 | `test/*.test.ts` | `vitest` unit tests; input-heavy modules use `fast-check` |
 | `test/feishu-live.ts` | Live integration test against the real Feishu platform |
-| `skills/` | The `access` skill |
+| `skills/` | The `access` skill and the channel ownership `handoff` skill |
 
 The core logic is written as small modules with **no live-Feishu dependency**
 so it unit-tests without a running server or connection.

@@ -14,7 +14,8 @@ Depth lives in the KB (repo-root `.agents/`, not shipped to users): `.agents/com
 - Access control / pairing / content parsing: `src/*.ts`.
 - Config factory: `scripts/configure.ts` (writes `.env`, verifies against Feishu); slash command `commands/configure.md`.
 - Peer-bot discovery: `src/identity-store.ts` (app-wide `open_id → name`), `src/chat-bots-store.ts` (per-chat membership + injection state), `src/bot-discovery.ts` (auto-observe + baseline/delta builder), `src/handlers/bot-member.ts` (`im.chat.member.bot.added_v1`). The `feishu_list_chat_bots` MCP tool is in `src/server.ts`.
-- Skill: `skills/access/`.
+- Skills: `skills/access/` (pairing/allowlist/group policy) and `skills/handoff/`
+  (Dispatcher ↔ teammate channel ownership transfer).
 
 ## Adding a Feishu event type
 
