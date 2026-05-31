@@ -32,6 +32,7 @@ export interface StartProxyDeps {
   sessionId: string
   pid: number
   proxyVersion: string
+  role: 'dispatcher' | 'session'
   /** The MCP server to wire (real `createMcpServer()` or a test fake). */
   mcpServer: ProxyMcpServer
   logError?(message: string, err?: unknown): void
@@ -51,6 +52,7 @@ export async function startProxy(deps: StartProxyDeps): Promise<ProxyHandle> {
     sessionId: deps.sessionId,
     pid: deps.pid,
     proxyVersion: deps.proxyVersion,
+    role: deps.role,
     logError: deps.logError,
     deliverToClaude: async (content, meta) => {
       await deps.mcpServer.notification(channelNotification(content, meta))

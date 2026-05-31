@@ -47,6 +47,7 @@ describe('daemon/proxy over a real unix socket', () => {
       sessionId: 'sess-X',
       pid: 4321,
       proxyVersion: '0.2.1',
+      role: 'dispatcher',
       deliverToClaude: async (content, meta) => {
         delivered.push({ content, meta })
       },
@@ -58,7 +59,12 @@ describe('daemon/proxy over a real unix socket', () => {
     await waitFor(() => server!.connections.size === 1)
     const conn = [...server!.connections][0]!
     await waitFor(() => conn.session !== null)
-    expect(conn.session).toEqual({ sessionId: 'sess-X', pid: 4321, proxyVersion: '0.2.1' })
+    expect(conn.session).toEqual({
+      sessionId: 'sess-X',
+      pid: 4321,
+      proxyVersion: '0.2.1',
+      role: 'dispatcher',
+    })
 
     // tool call: proxy -> socket -> daemon core -> result -> socket -> proxy
     await expect(proxy.client.callTool('reply', { chat_id: 'oc_1', text: 'hi' })).resolves.toEqual({
@@ -84,6 +90,7 @@ describe('daemon/proxy over a real unix socket', () => {
       sessionId: 'sess-Y',
       pid: 5,
       proxyVersion: '0.2.1',
+      role: 'session',
       deliverToClaude: async (content, meta) => {
         delivered.push({ content, meta })
       },

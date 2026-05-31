@@ -20,6 +20,7 @@ export interface ProxyClientDeps {
   sessionId: string
   pid: number
   proxyVersion: string
+  role: 'dispatcher' | 'session'
   /** Write one message to the daemon (the framed socket write). */
   send(message: ProxyToDaemon): void
   /**
@@ -60,6 +61,7 @@ export function createProxyClient(deps: ProxyClientDeps): ProxyClient {
         sessionId: deps.sessionId,
         pid: deps.pid,
         proxyVersion: deps.proxyVersion,
+        role: deps.role,
       })
     },
 

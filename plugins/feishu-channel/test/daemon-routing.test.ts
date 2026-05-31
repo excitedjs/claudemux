@@ -18,10 +18,13 @@ function fakeConn(session: RegisteredSession | null) {
   return { conn, delivered }
 }
 
-const sess = (sessionId: string): RegisteredSession => ({ sessionId, pid: 1, proxyVersion: '0' })
+const sess = (
+  sessionId: string,
+  role: RegisteredSession['role'] = 'session',
+): RegisteredSession => ({ sessionId, pid: 1, proxyVersion: '0', role })
 
 describe('selectPrimary', () => {
-  test('returns the first connection that has registered a session', () => {
+  test('returns the first ordinary session when no dispatcher is online', () => {
     const a = fakeConn(null)
     const b = fakeConn(sess('B'))
     const c = fakeConn(sess('C'))
@@ -32,6 +35,22 @@ describe('selectPrimary', () => {
   test('returns null when no connection has registered yet', () => {
     expect(selectPrimary(new Set([fakeConn(null).conn]), {})).toBeNull()
     expect(selectPrimary(new Set(), {})).toBeNull()
+  })
+
+  test('prefers a dispatcher over ordinary sessions', () => {
+    const a = fakeConn(sess('ordinary'))
+    const b = fakeConn(sess('dispatcher', 'dispatcher'))
+    const c = fakeConn(sess('another'))
+    expect(selectPrimary(new Set([a.conn, b.conn, c.conn]), {})).toBe(b.conn)
+  })
+
+  test('a reconnected dispatcher wins over an earlier dispatcher', () => {
+    const oldDispatcher = fakeConn(sess('old', 'dispatcher'))
+    const ordinary = fakeConn(sess('ordinary'))
+    const newDispatcher = fakeConn(sess('new', 'dispatcher'))
+    expect(selectPrimary(new Set([oldDispatcher.conn, ordinary.conn, newDispatcher.conn]), {})).toBe(
+      newDispatcher.conn,
+    )
   })
 })
 

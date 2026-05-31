@@ -9,7 +9,7 @@ import {
 } from '../src/ipc'
 
 const SAMPLES: IpcMessage[] = [
-  { t: 'register', sessionId: 's-1', pid: 4242, proxyVersion: '0.2.1' },
+  { t: 'register', sessionId: 's-1', pid: 4242, proxyVersion: '0.2.1', role: 'dispatcher' },
   { t: 'tool', id: 7, name: 'reply', args: { chat_id: 'oc_x', text: 'hi <@ou_a>' } },
   { t: 'ack', eventId: 'evt_123' },
   { t: 'hello', daemonVersion: '0.2.1', generation: 3 },

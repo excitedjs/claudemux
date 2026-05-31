@@ -688,6 +688,7 @@ export async function connectProxyOrSpawnDaemon(deps: ConnectProxyDeps): Promise
         sessionId: sessionId(),
         pid: process.pid,
         proxyVersion: SERVER_VERSION,
+        role: proxyRole(),
         mcpServer: deps.mcpServer,
         logError: defaultLogError,
       })
@@ -727,6 +728,13 @@ function pluginRoot(): string {
 
 function sessionId(): string {
   return `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function proxyRole(): 'dispatcher' | 'session' {
+  return process.env.FEISHU_CHANNEL_PROXY_ROLE === 'dispatcher' ||
+    process.env.FEISHU_CHANNEL_DISPATCHER === '1'
+    ? 'dispatcher'
+    : 'session'
 }
 
 function sleep(ms: number): Promise<void> {

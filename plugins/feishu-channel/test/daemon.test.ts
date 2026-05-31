@@ -94,6 +94,7 @@ describe('startDaemon (process body)', () => {
       sessionId: 's1',
       pid: 1,
       proxyVersion: '0.2.1',
+      role: 'dispatcher',
       deliverToClaude: async () => {},
     })
     proxies.push(proxy)

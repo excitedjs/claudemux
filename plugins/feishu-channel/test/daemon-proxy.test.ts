@@ -14,6 +14,7 @@ function connect(opts: {
   core: DaemonCore
   deliverToClaude(content: string, meta: Record<string, string>): Promise<void>
   onAck?(eventId: string): void
+  role?: 'dispatcher' | 'session'
 }) {
   const queue: Array<['proxy', DaemonToProxy] | ['daemon', ProxyToDaemon]> = []
 
@@ -28,6 +29,7 @@ function connect(opts: {
     sessionId: 'sess-A',
     pid: 999,
     proxyVersion: '0.2.1',
+    role: opts.role ?? 'session',
     deliverToClaude: opts.deliverToClaude,
     send: (m) => queue.push(['daemon', m]),
   })
@@ -51,7 +53,12 @@ describe('daemon <-> proxy protocol', () => {
     proxyClient.register()
     await pump()
     expect(proxyClient.daemon).toEqual({ daemonVersion: '0.2.1', generation: 1 })
-    expect(daemonConn.session).toEqual({ sessionId: 'sess-A', pid: 999, proxyVersion: '0.2.1' })
+    expect(daemonConn.session).toEqual({
+      sessionId: 'sess-A',
+      pid: 999,
+      proxyVersion: '0.2.1',
+      role: 'session',
+    })
   })
 
   test('forwards a tool call and returns the daemon-run result', async () => {

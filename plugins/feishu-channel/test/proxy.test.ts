@@ -54,6 +54,7 @@ describe('thin proxy MCP wiring', () => {
       sessionId: 's1',
       pid: 1,
       proxyVersion: '0.2.1',
+      role: 'session',
       mcpServer: mcp.server,
     })
     return { mcp, handleTool }
@@ -111,6 +112,9 @@ describe('connectProxyOrSpawnDaemon', () => {
 
     expect(result).toBe(handle)
     expect(startProxyFn).toHaveBeenCalledTimes(2)
+    expect(startProxyFn).toHaveBeenLastCalledWith(
+      expect.objectContaining({ socketPath: '/tmp/feishu.sock', role: 'session' }),
+    )
     expect(spawnDaemonProcessFn).toHaveBeenCalledTimes(1)
     expect(spawnDaemonProcessFn).toHaveBeenCalledWith('/tmp/feishu-state')
     expect(sleepFn).toHaveBeenCalledWith(100)

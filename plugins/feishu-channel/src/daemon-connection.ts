@@ -36,6 +36,7 @@ export interface RegisteredSession {
   sessionId: string
   pid: number
   proxyVersion: string
+  role: 'dispatcher' | 'session'
 }
 
 export interface DaemonConnection {
@@ -67,10 +68,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       switch (message.t) {
         case 'register':
           session = {
-          sessionId: message.sessionId,
-          pid: message.pid,
-          proxyVersion: message.proxyVersion,
-        }
+            sessionId: message.sessionId,
+            pid: message.pid,
+            proxyVersion: message.proxyVersion,
+            role: message.role,
+          }
           deps.onRegister?.(conn)
           return
         case 'ack':

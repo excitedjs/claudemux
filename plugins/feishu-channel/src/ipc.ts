@@ -12,7 +12,13 @@
 /** Proxy -> daemon. */
 export type ProxyToDaemon =
   /** First message after connect: identify the session behind this proxy. */
-  | { t: 'register'; sessionId: string; pid: number; proxyVersion: string }
+  | {
+      t: 'register'
+      sessionId: string
+      pid: number
+      proxyVersion: string
+      role: 'dispatcher' | 'session'
+    }
   /** Forward an MCP tool call (reply / react / edit_message) for the daemon to run. */
   | { t: 'tool'; id: number; name: string; args: Record<string, unknown> }
   /**
