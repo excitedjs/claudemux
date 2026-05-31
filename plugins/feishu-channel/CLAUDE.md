@@ -13,6 +13,7 @@ Depth lives in the KB (repo-root `.agents/`, not shipped to users): `.agents/com
 - Transport (event-type agnostic): `src/feishu.ts` — `lark.WSClient`, `onError` / `onReconnecting` / `onReconnected`; log-line builders in `src/connection.ts`.
 - Access control / pairing / content parsing: `src/*.ts`.
 - Config factory: `scripts/configure.ts` (writes `.env`, verifies against Feishu); slash command `commands/configure.md`.
+- Peer-bot discovery: `src/identity-store.ts` (app-wide `open_id → name`), `src/chat-bots-store.ts` (per-chat membership + injection state), `src/bot-discovery.ts` (auto-observe + baseline/delta builder), `src/handlers/bot-member.ts` (`im.chat.member.bot.added_v1`). The `feishu_list_chat_bots` MCP tool is in `src/server.ts`.
 - Skill: `skills/access/`.
 
 ## Adding a Feishu event type
@@ -26,6 +27,7 @@ One handler module under `src/handlers/` plus one `register(...)` line in `creat
 - **Replies route by `chat_id`, never `message_id`.** A `message_id` echoed back from some other context cannot redirect a reply into an unrelated chat.
 - **Group access is the `access.json` `groupPolicy` switch:** `block` / `allowlist` (each group authorized by pairing) / `follow-user`. → `.agents/decisions/feishu-channel-group-policy-modes.md`.
 - **An inbound chat message gets a "received" reaction on arrival, cleared on reply.** The emoji is a random pick from `RECEIVED_REACTION_EMOJIS` (👀 `GLANCE`, `LGTM`, `Typing`, `GoGoGo`, `OnIt`) via `pickReceivedReactionEmoji`. The `message_id → reaction_id` map lives in memory in `createChannelCore`, not on disk; removal keys off the returned `reaction_id`, so it is emoji-agnostic.
+- **Peer-bot discovery does not feed the access gate.** Auto-observe records any bot sender into `chat-bots-store`'s `openIds` (discovery) but only `/introduce` writes `introducedOpenIds` (the gate's trust set) — observing a bot must never let it reach the session. One-shot discovery context (baseline/delta/sender line) is committed via `ChannelDelivery.commit`, run by `createChannelCore` **only after `notify` succeeds**, so a failed delivery does not consume it. `im.chat.member.bot.added_v1` carries no added-bot `open_id` and reaches only the added bot, so it can only arm "I joined", not enumerate peers. → `.agents/decisions/feishu-channel-bot-discovery.md`.
 
 ## Requirements / boundaries
 

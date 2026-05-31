@@ -34,10 +34,20 @@ export function lockFile(base: string = stateDir()): string {
 }
 
 /**
- * observed-bots-{appId}-{chatId}.json — bots discovered via /introduce in a
- * specific group, keyed by the observing app's perspective (open_ids in this
- * file are valid for this app to use when @-mentioning).
+ * feishu-bot-identity-{appId}.json — the app-wide `open_id → name` map for
+ * peer bots. Keyed by the observing app only: a Feishu open_id is stable for a
+ * given bot across every chat this app shares with it, so identity is reused
+ * channel-wide rather than duplicated per chat.
  */
-export function observedBotsFile(base: string, appId: string, chatId: string): string {
-  return join(base, `observed-bots-${appId}-${chatId}.json`)
+export function botIdentityFile(base: string, appId: string): string {
+  return join(base, `feishu-bot-identity-${appId}.json`)
+}
+
+/**
+ * feishu-chat-bots-{appId}-{chatId}.json — which bots are in one chat and how
+ * far the one-shot discovery injection has progressed for it. Per (appId,
+ * chatId) so membership cannot leak between chats or apps.
+ */
+export function chatBotsFile(base: string, appId: string, chatId: string): string {
+  return join(base, `feishu-chat-bots-${appId}-${chatId}.json`)
 }

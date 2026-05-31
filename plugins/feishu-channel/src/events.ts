@@ -24,6 +24,13 @@ export interface ChannelDelivery {
    * Code silently drops a key that contains a hyphen.
    */
   meta: Record<string, string>
+  /**
+   * Optional commit hook the server runs only after the session notification
+   * succeeds. A handler uses it to persist "already delivered" state — e.g.
+   * marking a one-shot context as injected — so that a failed delivery does
+   * not consume state the model never actually saw.
+   */
+  commit?: () => void | Promise<void>
 }
 
 /**

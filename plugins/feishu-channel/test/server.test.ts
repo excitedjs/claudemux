@@ -12,6 +12,9 @@ import {
   RECEIVED_REACTION_EMOJIS,
 } from '../src/server'
 import type { Access } from '../src/types'
+import { BOT_MEMBER_ADDED_EVENT_TYPE } from '../src/handlers/bot-member'
+import { markNeedsBaseline, readChatBots, recordChatMember } from '../src/chat-bots-store'
+import { recordBotIdentity } from '../src/identity-store'
 import { FakeTransport } from './support/fake-transport'
 
 const NOW = 1_700_000_000_000
@@ -154,9 +157,108 @@ describe('handleEvent — dispatch', () => {
 })
 
 describe('tools', () => {
-  test('exposes reply, react, and edit_message', () => {
+  test('exposes reply, react, edit_message, and feishu_list_chat_bots', () => {
     const core = makeCore(new FakeTransport(), [])
-    expect(core.tools.map((t) => t.name).sort()).toEqual(['edit_message', 'react', 'reply'])
+    expect(core.tools.map((t) => t.name).sort()).toEqual([
+      'edit_message',
+      'feishu_list_chat_bots',
+      'react',
+      'reply',
+    ])
+  })
+})
+
+describe('handleTool — feishu_list_chat_bots', () => {
+  test('returns the known peer bots in a chat, excluding self by default', async () => {
+    const transport = new FakeTransport('ou_self')
+    recordBotIdentity(dir, transport.appId, 'oc_grp', [{ openId: 'ou_b', name: 'BotB' }], 'introduce', NOW)
+    recordChatMember(dir, transport.appId, 'oc_grp', 'ou_b')
+    recordChatMember(dir, transport.appId, 'oc_grp', 'ou_self')
+    const core = makeCore(transport, [])
+
+    const result = await core.handleTool('feishu_list_chat_bots', { chat_id: 'oc_grp' })
+
+    expect(result.isError).toBeUndefined()
+    const text = JSON.stringify(result.content)
+    expect(text).toContain('ou_b')
+    expect(text).toContain('BotB')
+    expect(text).not.toContain('ou_self')
+  })
+
+  test('include_self=true includes the bot itself', async () => {
+    const transport = new FakeTransport('ou_self')
+    recordBotIdentity(dir, transport.appId, 'oc_grp', [{ openId: 'ou_self', name: 'Me' }], 'observed', NOW)
+    recordChatMember(dir, transport.appId, 'oc_grp', 'ou_self')
+    const core = makeCore(transport, [])
+
+    const result = await core.handleTool('feishu_list_chat_bots', {
+      chat_id: 'oc_grp',
+      include_self: true,
+    })
+
+    expect(JSON.stringify(result.content)).toContain('ou_self')
+  })
+
+  test('an unknown chat returns an empty list, not an error', async () => {
+    const core = makeCore(new FakeTransport('ou_self'), [])
+    const result = await core.handleTool('feishu_list_chat_bots', { chat_id: 'oc_none' })
+    expect(result.isError).toBeUndefined()
+    expect(JSON.stringify(result.content)).toContain('[]')
+  })
+
+  test('a missing chat_id is an error result, not a throw', async () => {
+    const core = makeCore(new FakeTransport('ou_self'), [])
+    const result = await core.handleTool('feishu_list_chat_bots', {})
+    expect(result.isError).toBe(true)
+  })
+})
+
+describe('bot-discovery commit runs only after a successful notify', () => {
+  /** A group follow-user @-mention from an allowlisted human, with a baseline armed. */
+  function groupMention(): Record<string, unknown> {
+    return {
+      sender: { sender_id: { open_id: 'ou_human' }, sender_type: 'user' },
+      message: {
+        message_id: 'om_grp',
+        chat_id: 'oc_grp',
+        chat_type: 'group',
+        message_type: 'text',
+        content: '{"text":"hello"}',
+        mentions: [{ key: '@_user_1', id: { open_id: 'ou_self' } }],
+      },
+    }
+  }
+
+  test('a successful delivery commits the baseline as injected', async () => {
+    writeAccess({ groupPolicy: 'follow-user', allowFrom: ['ou_human'] })
+    const transport = new FakeTransport('ou_self')
+    markNeedsBaseline(dir, transport.appId, 'oc_grp')
+    const core = makeCore(transport, [])
+
+    await core.handleEvent(IM_MESSAGE_EVENT_TYPE, groupMention())
+
+    expect(readChatBots(dir, transport.appId, 'oc_grp').baselineInjectedAt).toBe(NOW)
+  })
+
+  test('a failed notify leaves the baseline un-injected, to retry next time', async () => {
+    writeAccess({ groupPolicy: 'follow-user', allowFrom: ['ou_human'] })
+    const transport = new FakeTransport('ou_self')
+    markNeedsBaseline(dir, transport.appId, 'oc_grp')
+    const core = makeCore(transport, [], [], () => {
+      throw new Error('notify failed')
+    })
+
+    await core.handleEvent(IM_MESSAGE_EVENT_TYPE, groupMention())
+
+    expect(readChatBots(dir, transport.appId, 'oc_grp').baselineInjectedAt).toBeNull()
+    expect(readChatBots(dir, transport.appId, 'oc_grp').needsBaselineOnNextMention).toBe(true)
+  })
+})
+
+describe('event registry — bot-added route', () => {
+  test('exposes a route for the bot-added event type', () => {
+    const core = makeCore(new FakeTransport(), [])
+    expect(Object.keys(core.routes)).toContain(BOT_MEMBER_ADDED_EVENT_TYPE)
   })
 })
 

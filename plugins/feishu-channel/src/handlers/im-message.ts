@@ -14,7 +14,9 @@ import { loadAccess, saveAccess } from '../access-store'
 import { parseInbound } from '../content'
 import type { ChannelDelivery, EventHandler, HandlerContext } from '../events'
 import { asString, isRecord } from '../json'
-import { listObservedBots, recordObservedBots } from '../observed-bots-store'
+import { recordBotIdentity } from '../identity-store'
+import { readChatBots, recordChatMember } from '../chat-bots-store'
+import { buildDiscoveryContext, observeBotSender } from '../bot-discovery'
 import type { Mention } from '../types'
 
 /** The Feishu event_type this handler subscribes to. */
@@ -66,34 +68,58 @@ export function createImMessageHandler(): EventHandler {
 
       // Hoist the /introduce detection once; both paths below reuse this result.
       const isIntroduce = isIntroduceCommand(event.content, event.messageType, event.mentions)
+      const isGroup = event.chatType === 'group'
+      const groupAuthorized =
+        isGroup && isGroupAuthorized(loaded.access, event.chatId, event.senderId)
+
+      // Passive auto-observe: any bot message in an authorized group teaches us
+      // that bot's open_id, so the model can later @-mention it. This is
+      // discovery only — it records the bot into the per-chat membership and the
+      // app-wide identity map, but NOT into the gate's trust set, so observing a
+      // bot never widens who may reach the session. Runs before the gate so even
+      // an about-to-be-dropped ambient message still contributes to discovery.
+      if (isGroup && groupAuthorized && isBotSenderType(event.senderType)) {
+        const senderName =
+          event.mentions.find((m) => m.id?.open_id === event.senderId)?.name ?? ''
+        observeBotSender(ctx.baseDir, ctx.transport.appId, event.chatId, {
+          botOpenId: ctx.transport.botOpenId,
+          senderType: event.senderType,
+          senderOpenId: event.senderId,
+          senderName,
+          now: ctx.now(),
+        })
+      }
 
       // Ambient /introduce: a bot sender that broadcasts /introduce in an
-      // authorized group is recorded even without @-mentioning us. Runs before
-      // observedBotIds is loaded so the sender is included in the gate check on
-      // this same message (enabling single-step self-introduction).
-      if (
-        event.chatType === 'group' &&
-        isBotSenderType(event.senderType) &&
-        isIntroduce &&
-        isGroupAuthorized(loaded.access, event.chatId, event.senderId)
-      ) {
+      // authorized group authorizes itself — it joins the gate's trust set even
+      // without @-mentioning us. Runs before the gate's trust set is read below,
+      // so the sender passes the gate on this same message (single-step
+      // self-introduction).
+      if (isGroup && groupAuthorized && isBotSenderType(event.senderType) && isIntroduce) {
         const name =
           event.mentions.find((m) => m.id?.open_id === event.senderId)?.name ?? event.senderId
         try {
-          recordObservedBots(ctx.baseDir, ctx.transport.appId, event.chatId, [
-            { openId: event.senderId, name },
-          ])
+          recordBotIdentity(
+            ctx.baseDir,
+            ctx.transport.appId,
+            event.chatId,
+            [{ openId: event.senderId, name }],
+            'introduce',
+            ctx.now(),
+          )
+          recordChatMember(ctx.baseDir, ctx.transport.appId, event.chatId, event.senderId, {
+            introduced: true,
+          })
         } catch (err) {
           ctx.logError('ambient /introduce: failed to persist sender bot', err)
         }
       }
 
-      const observedBotIds =
-        event.chatType === 'group'
-          ? new Set(
-              listObservedBots(ctx.baseDir, ctx.transport.appId, event.chatId).map((b) => b.openId),
-            )
-          : undefined
+      // The gate's trust set is the introduce-authorized bots only — passive
+      // auto-observe above does not feed it.
+      const observedBotIds = isGroup
+        ? new Set(readChatBots(ctx.baseDir, ctx.transport.appId, event.chatId).introducedOpenIds)
+        : undefined
 
       const decision = gate({
         senderId: event.senderId,
@@ -127,9 +153,26 @@ export function createImMessageHandler(): EventHandler {
       }
 
       switch (decision.action) {
-        case 'deliver':
+        case 'deliver': {
           persist()
-          return { content: parsed.text, meta: buildMeta(event) }
+          // Attach the one-shot bot-discovery context — a sender line for a
+          // peer bot, the first-join baseline, and any incremental delta. The
+          // `commit` persists "already injected" state and is returned on the
+          // delivery so the server runs it only after the session notification
+          // succeeds; a failed delivery then leaves the one-shot context to be
+          // re-attached next time rather than silently consumed.
+          const discovery = isGroup
+            ? buildDiscoveryContext(ctx.baseDir, ctx.transport.appId, event.chatId, {
+                botOpenId: ctx.transport.botOpenId,
+                senderType: event.senderType,
+                senderOpenId: event.senderId,
+                now: ctx.now(),
+              })
+            : undefined
+          const content =
+            discovery && discovery.prefix ? discovery.prefix + parsed.text : parsed.text
+          return { content, meta: buildMeta(event), commit: discovery?.commit }
+        }
         case 'drop':
           persist()
           ctx.logDebug(
@@ -165,11 +208,13 @@ export function createImMessageHandler(): EventHandler {
 // A user sends `@BotA @BotB /introduce` in a group. Each bot receives the
 // same event with mentions[] populated from its own app's perspective — the
 // open_ids in that list are exactly the ids this app must use to @-mention the
-// others. We persist them so the observed-bot gate can authorize messages
-// from peer bots in that group.
+// others. We persist them as introduced, gate-trusted members of that chat, so
+// a peer bot's message there reaches the session.
 //
-// Feishu has no public API to list bot members of a group; /introduce is the
-// only reliable path to learn a peer bot's open_id.
+// `/introduce` is the explicit path; passive auto-observe (above) also learns a
+// peer's open_id from any message it sends, but only for discovery — it does
+// not authorize the gate. Feishu has no API to list a group's bot members, so
+// these two paths are the only ways to learn a peer bot's open_id.
 
 const INTRODUCE_RE = /^\/introduce(?:\s|$)/i
 
@@ -213,32 +258,37 @@ function isIntroduceCommand(rawContent: string, messageType: string, mentions: M
 }
 
 /**
- * Side-effect for an authorized /introduce command: persist observed bots and
- * send a best-effort ack. Only called when the access gate says deliver.
+ * Side-effect for an authorized /introduce command: persist the @-mentioned
+ * peer bots and send a best-effort ack. Only called when the access gate says
+ * deliver. The bot itself is excluded — it is always in its own mentions, but
+ * recording or counting itself as a "partner" is meaningless. Each peer is
+ * double-written: into the app-wide identity map (open_id → name) and into the
+ * per-chat membership as an introduced, gate-trusted member.
  */
 async function handleIntroduce(event: FeishuInboundEvent, ctx: HandlerContext): Promise<void> {
-  const botsToRecord = event.mentions
+  const external = event.mentions
     .map((m) => ({ openId: m.id?.open_id ?? '', name: m.name ?? '' }))
-    .filter((b) => b.openId && b.name)
+    .filter((b) => b.openId && b.name && b.openId !== ctx.transport.botOpenId)
 
-  const hasExternal = botsToRecord.some((b) => b.openId !== ctx.transport.botOpenId)
-  if (!hasExternal) {
+  if (external.length === 0) {
     ctx.logDebug(`/introduce in ${event.chatId}: no external bot in mentions — ignoring`)
     return
   }
 
   try {
-    recordObservedBots(ctx.baseDir, ctx.transport.appId, event.chatId, botsToRecord)
+    recordBotIdentity(ctx.baseDir, ctx.transport.appId, event.chatId, external, 'introduce', ctx.now())
+    for (const b of external) {
+      recordChatMember(ctx.baseDir, ctx.transport.appId, event.chatId, b.openId, {
+        introduced: true,
+      })
+    }
   } catch (err) {
     ctx.logError('/introduce: failed to persist observed bots', err)
   }
 
-  const items = botsToRecord.map((b) => `@${b.name}`).join(' ')
+  const items = external.map((b) => `@${b.name}`).join(' ')
   try {
-    await ctx.transport.sendText(
-      event.chatId,
-      `✅ 已认识本群 ${botsToRecord.length} 个伙伴：${items}`,
-    )
+    await ctx.transport.sendText(event.chatId, `✅ 已认识本群 ${external.length} 个伙伴：${items}`)
   } catch (err) {
     ctx.logError('/introduce: ack failed', err)
   }

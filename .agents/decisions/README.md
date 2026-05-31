@@ -41,6 +41,7 @@ record kept for history — open it and follow its Status link to the current on
 - [feishu-channel-launch-without-session-proxy](/.agents/decisions/feishu-channel-launch-without-session-proxy.md) — the MCP server launched with the session proxy cleared
 - [feishu-channel-orphan-detection-by-stdin-eof](/.agents/decisions/feishu-channel-orphan-detection-by-stdin-eof.md) — exited-parent detection by stdin EOF
 - [feishu-channel-received-reaction-indicator](/.agents/decisions/feishu-channel-received-reaction-indicator.md) — the received-reaction indicator on inbound messages
+- [feishu-channel-bot-discovery](/.agents/decisions/feishu-channel-bot-discovery.md) — auto-discovery of peer bots' Open IDs, one-shot injection, gate kept separate
 - [feishu-doc-comment-enrichment](/.agents/decisions/feishu-doc-comment-enrichment.md) — SDK decode + fetched text/title enrichment
 - [feishu-doc-comment-fetch-via-batch-query](/.agents/decisions/feishu-doc-comment-fetch-via-batch-query.md) — comment text via `fileComment.batchQuery`
 - [feishu-worker-scoped-subscription](/.agents/decisions/feishu-worker-scoped-subscription.md) — Worker-scoped subscription via a co-hosted holder
@@ -68,6 +69,7 @@ never collide on a sequence number.
 | [codex-engine-flag](/.agents/decisions/codex-engine-flag.md) | The codex teammate kind moves from a `codex-` name prefix to an explicit `tm spawn --engine` flag, with one-minor deprecation | Superseded by [multi-engine-tui-architecture](/.agents/decisions/multi-engine-tui-architecture.md) |
 | [cross-process-cross-platform-invariants](/.agents/decisions/cross-process-cross-platform-invariants.md) | Three cross-process / cross-platform invariants were promoted into `CLAUDE.md` | Accepted |
 | [dispatcher-teammate-model](/.agents/decisions/dispatcher-teammate-model.md) | The foundational architecture — a dispatcher session orchestrating per-repo `tmux` `claude` teammates via `tm`, chosen over Agent Teams (no cwd pin, no per-repo memory); the dispatcher role grew from launcher to coordinator | Accepted |
+| [feishu-channel-bot-discovery](/.agents/decisions/feishu-channel-bot-discovery.md) | Peer bots' Open IDs are auto-discovered from messages + `/introduce`, surfaced via a one-shot baseline/delta and an MCP query tool; observing never widens the access gate | Accepted |
 | [feishu-channel-event-registry](/.agents/decisions/feishu-channel-event-registry.md) | The Feishu channel handles events through an extensible registry of per-event handlers | Accepted |
 | [feishu-channel-group-pairing](/.agents/decisions/feishu-channel-group-pairing.md) | A Feishu group is authorized by pairing — an @-mention posts a code the operator approves | Accepted |
 | [feishu-channel-group-policy-modes](/.agents/decisions/feishu-channel-group-policy-modes.md) | Feishu group access is a three-mode `groupPolicy` switch — block / allowlist (decision feishu-channel-group-pairing) / follow-user | Accepted |

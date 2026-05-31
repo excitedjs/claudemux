@@ -9,7 +9,7 @@ import {
   createImMessageHandler,
   normalizeInboundEvent,
 } from '../../src/handlers/im-message'
-import { listObservedBots, recordObservedBots } from '../../src/observed-bots-store'
+import { readChatBots, recordChatMember } from '../../src/chat-bots-store'
 import type { Access } from '../../src/types'
 import { FakeTransport } from '../support/fake-transport'
 
@@ -338,7 +338,7 @@ describe('createImMessageHandler — observed-bot delivery (follow-user policy)'
   test('delivers a message from a peer bot in observed-bots that @-mentions the bot', async () => {
     writeAccess({ groupPolicy: 'follow-user', allowFrom: [] })
     const transport = new FakeTransport('ou_self')
-    recordObservedBots(dir, transport.appId, 'oc_group', [{ openId: 'ou_peer_bot', name: 'PeerBot' }])
+    recordChatMember(dir, transport.appId, 'oc_group', 'ou_peer_bot', { introduced: true })
     const handler = createImMessageHandler()
 
     const delivery = await handler.handle(
@@ -357,14 +357,18 @@ describe('createImMessageHandler — observed-bot delivery (follow-user policy)'
       makeCtx(transport),
     )
 
-    expect(delivery?.content).toBe('hello from peer')
+    // The message body is delivered, now prefixed with a one-shot sender line
+    // naming the peer bot's open_id so the model can @-mention it back.
+    expect(delivery?.content).toContain('hello from peer')
+    expect(delivery?.content).toContain('【发送方 bot】')
+    expect(delivery?.content).toContain('ou_peer_bot')
     expect(delivery?.meta.sender_id).toBe('ou_peer_bot')
   })
 
   test('observed bot without @-mention is still dropped', async () => {
     writeAccess({ groupPolicy: 'follow-user', allowFrom: [] })
     const transport = new FakeTransport('ou_self')
-    recordObservedBots(dir, transport.appId, 'oc_group', [{ openId: 'ou_peer_bot', name: 'PeerBot' }])
+    recordChatMember(dir, transport.appId, 'oc_group', 'ou_peer_bot', { introduced: true })
     const handler = createImMessageHandler()
 
     const delivery = await handler.handle(
@@ -390,7 +394,7 @@ describe('createImMessageHandler — observed-bot delivery (follow-user policy)'
     writeAccess({ groupPolicy: 'follow-user', allowFrom: [] })
     const transport = new FakeTransport('ou_self')
     // Register the bot only in 'oc_other_group', not 'oc_group'
-    recordObservedBots(dir, transport.appId, 'oc_other_group', [{ openId: 'ou_peer_bot', name: 'PeerBot' }])
+    recordChatMember(dir, transport.appId, 'oc_other_group', 'ou_peer_bot', { introduced: true })
     const handler = createImMessageHandler()
 
     const delivery = await handler.handle(
@@ -418,7 +422,7 @@ describe('createImMessageHandler — observed-bot delivery (follow-user policy)'
     // also on allowFrom.
     writeAccess({ groupPolicy: 'follow-user', allowFrom: [] })
     const transport = new FakeTransport('ou_self')
-    recordObservedBots(dir, transport.appId, 'oc_group', [{ openId: 'ou_human', name: 'Alice' }])
+    recordChatMember(dir, transport.appId, 'oc_group', 'ou_human', { introduced: true })
     const handler = createImMessageHandler()
 
     const delivery = await handler.handle(
@@ -566,8 +570,8 @@ describe('createImMessageHandler — ambient /introduce (bot broadcasts without 
     const delivery = await handler.handle(botIntroduceEvent('/introduce'), makeCtx(transport))
 
     expect(delivery).toBeNull()
-    const bots = listObservedBots(dir, transport.appId, 'oc_grp')
-    expect(bots.map((b) => b.openId)).toContain('ou_peer_bot')
+    const bots = readChatBots(dir, transport.appId, 'oc_grp').openIds
+    expect(bots).toContain('ou_peer_bot')
   })
 
   test('silent — no ack message sent', async () => {
@@ -587,7 +591,7 @@ describe('createImMessageHandler — ambient /introduce (bot broadcasts without 
 
     await handler.handle(botIntroduceEvent('/introduce'), makeCtx(transport))
 
-    expect(listObservedBots(dir, transport.appId, 'oc_grp').map((b) => b.openId)).toContain('ou_peer_bot')
+    expect(readChatBots(dir, transport.appId, 'oc_grp').openIds).toContain('ou_peer_bot')
   })
 
   test('does NOT record in an unconfigured allowlist group', async () => {
@@ -597,7 +601,7 @@ describe('createImMessageHandler — ambient /introduce (bot broadcasts without 
 
     await handler.handle(botIntroduceEvent('/introduce'), makeCtx(transport))
 
-    expect(listObservedBots(dir, transport.appId, 'oc_grp')).toHaveLength(0)
+    expect(readChatBots(dir, transport.appId, 'oc_grp').openIds).toHaveLength(0)
   })
 
   test('does NOT record in a blocked group', async () => {
@@ -607,7 +611,7 @@ describe('createImMessageHandler — ambient /introduce (bot broadcasts without 
 
     await handler.handle(botIntroduceEvent('/introduce'), makeCtx(transport))
 
-    expect(listObservedBots(dir, transport.appId, 'oc_grp')).toHaveLength(0)
+    expect(readChatBots(dir, transport.appId, 'oc_grp').openIds).toHaveLength(0)
   })
 
   test('does NOT record a human sender (senderType=user)', async () => {
@@ -617,7 +621,7 @@ describe('createImMessageHandler — ambient /introduce (bot broadcasts without 
 
     await handler.handle(botIntroduceEvent('/introduce', 'oc_grp', 'user'), makeCtx(transport))
 
-    expect(listObservedBots(dir, transport.appId, 'oc_grp')).toHaveLength(0)
+    expect(readChatBots(dir, transport.appId, 'oc_grp').openIds).toHaveLength(0)
   })
 
   test('single-step: ambient records sender so same-message gate can deliver (follow-user + @-mention)', async () => {
@@ -647,7 +651,7 @@ describe('createImMessageHandler — ambient /introduce (bot broadcasts without 
 
     // /introduce always returns null, but the bot is now recorded
     expect(delivery).toBeNull()
-    expect(listObservedBots(dir, transport.appId, 'oc_grp').map((b) => b.openId)).toContain('ou_peer_bot')
+    expect(readChatBots(dir, transport.appId, 'oc_grp').openIds).toContain('ou_peer_bot')
   })
 
   test('does NOT record bot not in group allowFrom (allowlist policy with non-empty allowFrom)', async () => {
@@ -658,7 +662,7 @@ describe('createImMessageHandler — ambient /introduce (bot broadcasts without 
     await handler.handle(botIntroduceEvent('/introduce'), makeCtx(transport))
 
     // ou_peer_bot is not in allowFrom=['ou_allowed'] → should not be recorded
-    expect(listObservedBots(dir, transport.appId, 'oc_grp')).toHaveLength(0)
+    expect(readChatBots(dir, transport.appId, 'oc_grp').openIds).toHaveLength(0)
   })
 
   test('records bot in group allowFrom (allowlist policy)', async () => {
@@ -668,14 +672,14 @@ describe('createImMessageHandler — ambient /introduce (bot broadcasts without 
 
     await handler.handle(botIntroduceEvent('/introduce'), makeCtx(transport))
 
-    expect(listObservedBots(dir, transport.appId, 'oc_grp').map((b) => b.openId)).toContain('ou_peer_bot')
+    expect(readChatBots(dir, transport.appId, 'oc_grp').openIds).toContain('ou_peer_bot')
   })
 
   test('combination: bot sender + @OurBot + @BotB /introduce → ambient records sender, handleIntroduce records BotB, ack for BotB only', async () => {
     writeAccess({ groupPolicy: 'follow-user', allowFrom: [] })
     const transport = new FakeTransport('ou_self')
     // Pre-seed peer bot so gate delivers (otherwise handleIntroduce won't run)
-    recordObservedBots(dir, transport.appId, 'oc_grp', [{ openId: 'ou_peer_bot', name: 'PeerBot' }])
+    recordChatMember(dir, transport.appId, 'oc_grp', 'ou_peer_bot', { introduced: true })
     const handler = createImMessageHandler()
 
     await handler.handle(
@@ -698,7 +702,7 @@ describe('createImMessageHandler — ambient /introduce (bot broadcasts without 
     )
 
     // ambient records the sender; handleIntroduce records all mentions (self + ext)
-    const bots = listObservedBots(dir, transport.appId, 'oc_grp').map((b) => b.openId)
+    const bots = readChatBots(dir, transport.appId, 'oc_grp').openIds
     expect(bots).toContain('ou_peer_bot')  // ambient path
     expect(bots).toContain('ou_ext_bot')   // handleIntroduce
     // ack contains all mentioned bots (handleIntroduce records all mentions including self)
@@ -737,8 +741,8 @@ describe('createImMessageHandler — /introduce command', () => {
     const delivery = await handler.handle(introduceEvent('/introduce'), makeCtx(transport))
 
     expect(delivery).toBeNull()
-    const bots = listObservedBots(dir, transport.appId, 'oc_grp')
-    expect(bots.map((b) => b.openId)).toContain('ou_peer')
+    const bots = readChatBots(dir, transport.appId, 'oc_grp').openIds
+    expect(bots).toContain('ou_peer')
   })
 
   test('/introduce with leading mention keys is matched', async () => {
@@ -751,7 +755,7 @@ describe('createImMessageHandler — /introduce command', () => {
     const delivery = await handler.handle(event, makeCtx(transport))
 
     expect(delivery).toBeNull()
-    const bots = listObservedBots(dir, transport.appId, 'oc_grp')
+    const bots = readChatBots(dir, transport.appId, 'oc_grp').openIds
     expect(bots.length).toBeGreaterThan(0)
   })
 
@@ -781,7 +785,7 @@ describe('createImMessageHandler — /introduce command', () => {
     const delivery = await handler.handle(event, makeCtx(transport))
 
     expect(delivery).toBeNull()
-    expect(listObservedBots(dir, transport.appId, 'oc_grp').map((b) => b.openId)).toContain('ou_peer')
+    expect(readChatBots(dir, transport.appId, 'oc_grp').openIds).toContain('ou_peer')
   })
 
   test('/introducer does not match', async () => {
@@ -793,7 +797,7 @@ describe('createImMessageHandler — /introduce command', () => {
 
     // Falls through to normal delivery, not consumed
     expect(delivery).not.toBeNull()
-    expect(listObservedBots(dir, transport.appId, 'oc_grp')).toHaveLength(0)
+    expect(readChatBots(dir, transport.appId, 'oc_grp').openIds).toHaveLength(0)
   })
 
   test('explanatory text before /introduce does not match', async () => {
@@ -816,7 +820,7 @@ describe('createImMessageHandler — /introduce command', () => {
 
     expect(delivery).toBeNull()
     expect(transport.sent).toHaveLength(0)
-    expect(listObservedBots(dir, transport.appId, 'oc_grp')).toHaveLength(0)
+    expect(readChatBots(dir, transport.appId, 'oc_grp').openIds).toHaveLength(0)
   })
 
   test('/introduce on an unconfigured group does not persist a phantom pairing code', async () => {
@@ -855,7 +859,7 @@ describe('createImMessageHandler — /introduce command', () => {
     await handler.handle(event, makeCtx(transport))
 
     expect(transport.sent).toHaveLength(0)
-    expect(listObservedBots(dir, transport.appId, 'oc_grp')).toHaveLength(0)
+    expect(readChatBots(dir, transport.appId, 'oc_grp').openIds).toHaveLength(0)
   })
 
   test('sends an ack when authorized and external bot exists', async () => {
@@ -881,6 +885,6 @@ describe('createImMessageHandler — /introduce command', () => {
 
     expect(logErrors.some((m) => m.includes('/introduce'))).toBe(true)
     // Store write happened before the ack attempt
-    expect(listObservedBots(dir, transport.appId, 'oc_grp').length).toBeGreaterThan(0)
+    expect(readChatBots(dir, transport.appId, 'oc_grp').openIds.length).toBeGreaterThan(0)
   })
 })

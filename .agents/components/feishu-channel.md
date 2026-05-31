@@ -55,11 +55,14 @@ Feishu event type is one `EventHandler` (`src/events.ts`) that declares its
 `event_type` and maps a raw payload to a channel delivery. Adding a new event
 type is **one handler module under `src/handlers/` plus one registration
 line** in `createChannelCore` — the core pipeline and the transport do not
-change. Two handlers exist:
+change. Three handlers exist:
 
 - `im.message.receive_v1` — inbound chat messages (`src/handlers/im-message.ts`).
 - `drive.notice.comment_add_v1` — document comments and replies
   (`src/handlers/doc-comment.ts`).
+- `im.chat.member.bot.added_v1` — the bot was added to a group; arms a one-shot
+  peer-bot discovery baseline (`src/handlers/bot-member.ts`). It never delivers
+  to the model.
 
 See [decision feishu-channel-event-registry](/.agents/decisions/feishu-channel-event-registry.md)
 for the rationale.
@@ -75,6 +78,9 @@ for the rationale.
 | `src/server.ts` | `createChannelCore` — registry dispatch + the outbound tools |
 | `src/feishu.ts` | The Feishu transport boundary (event-type agnostic) |
 | `src/connection.ts` | Pure log-line builders for the WebSocket connection lifecycle |
+| `src/identity-store.ts` | App-wide `open_id → name` map for peer bots (per `appId`, cross-chat) |
+| `src/chat-bots-store.ts` | Per-`(appId, chatId)` bot membership + one-shot injection state |
+| `src/bot-discovery.ts` | Auto-observe + the baseline/delta context builder with its commit hook |
 | `src/handlers/*.ts` | One module per Feishu event type |
 | `src/*.ts` | Core logic — access control, content parsing, pairing, … |
 | `scripts/configure.ts` | Credential factory — writes `.env`, verifies against Feishu |
@@ -124,11 +130,25 @@ so it unit-tests without a running server or connection.
   `onReconnected` callbacks and a startup-grace watchdog, so a failed or
   dropped connection is logged instead of retrying silently. The log wording
   is built by the pure functions in `src/connection.ts`.
+- **Peer-bot discovery is observe-driven, and observing never widens the gate.**
+  A peer bot's `open_id` is learned passively from any bot message and from
+  `/introduce`, recorded into `identity-store` + `chat-bots-store`, and surfaced
+  to the model as a one-shot baseline/delta plus a sender line — committed only
+  after the session notification succeeds (`ChannelDelivery.commit`, run in
+  `createChannelCore`). The access gate's trust set is the `/introduce`-authorized
+  bots (`introducedOpenIds`) only; auto-observe writes the discovery set
+  (`openIds`) but not that. `im.chat.member.bot.added_v1` carries no added-bot
+  `open_id` and reaches only the bot being added, so it can trigger "I joined"
+  but cannot enumerate peers — there is no Feishu API to list a group's bots.
+  The `feishu_list_chat_bots` MCP tool re-queries the local discovery store
+  after compaction. See
+  [decision feishu-channel-bot-discovery](/.agents/decisions/feishu-channel-bot-discovery.md).
 
 ## See also
 
 - [decisions/feishu-channel-plugin.md](/.agents/decisions/feishu-channel-plugin.md) — why a second plugin, why a separate TypeScript project.
 - [decisions/feishu-channel-event-registry.md](/.agents/decisions/feishu-channel-event-registry.md) — the event registry and core design choices.
 - [decisions/feishu-channel-received-reaction-indicator.md](/.agents/decisions/feishu-channel-received-reaction-indicator.md) — the received-reaction indicator on inbound chat messages.
+- [decisions/feishu-channel-bot-discovery.md](/.agents/decisions/feishu-channel-bot-discovery.md) — auto-discovery of peer bots' Open IDs and one-shot injection.
 - [components/repo-tooling.md](/.agents/components/repo-tooling.md) — the CI `feishu-channel` job.
 - [root.md](/.agents/root.md) — repo layout.

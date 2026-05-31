@@ -25,8 +25,11 @@ import { EventRegistry } from './events'
 import type { ChannelDelivery, HandlerContext } from './events'
 import type { FeishuCredentials, FeishuTransport, InboundRoutes } from './feishu'
 import { createFeishuTransport } from './feishu'
+import { createBotMemberHandler } from './handlers/bot-member'
 import { createDocCommentHandler } from './handlers/doc-comment'
 import { createImMessageHandler } from './handlers/im-message'
+import { getBotIdentity } from './identity-store'
+import { readChatBots } from './chat-bots-store'
 import { asString, isRecord } from './json'
 import { generatePairingCode } from './pairing'
 import { accessFile, envFile, lockFile, stateDir } from './paths'
@@ -176,7 +179,33 @@ const CHANNEL_TOOLS: Tool[] = [
       required: ['message_id', 'text'],
     },
   },
+  {
+    name: 'feishu_list_chat_bots',
+    description:
+      'List the other Feishu bots known to be in a group chat, with their open_ids, so you can @-mention them with <@open_id>. Use this to recover peer-bot open_ids after your context was compacted, or whenever you are unsure which bots share a group. Returns only bots discovered so far (via their messages or /introduce); Feishu has no API to enumerate a group\'s bots, so a freshly joined group may list none until peers speak.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        chat_id: {
+          type: 'string',
+          description: 'Target chat_id, copied from the inbound <channel> tag.',
+        },
+        include_self: {
+          type: 'boolean',
+          description: 'Include this bot itself in the list. Defaults to false.',
+        },
+      },
+      required: ['chat_id'],
+    },
+  },
 ]
+
+/**
+ * How long since a bot was last seen before `feishu_list_chat_bots` flags it
+ * `stale`. A stale entry is still returned — it just signals the open_id may be
+ * out of date because that bot has been quiet for a while.
+ */
+const BOT_STALE_MS = 30 * 24 * 60 * 60 * 1000
 
 /**
  * Build the channel core. The returned object dispatches inbound events
@@ -207,6 +236,7 @@ export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
   const registry = new EventRegistry()
     .register(createImMessageHandler())
     .register(createDocCommentHandler())
+    .register(createBotMemberHandler())
 
   const routes: InboundRoutes = {}
   for (const eventType of registry.eventTypes()) {
@@ -253,6 +283,11 @@ export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
     logInfo(`${eventType} gated through — delivering (message ${messageId})`)
     try {
       await deps.notify(delivery.content, delivery.meta)
+      // The notification reached the session, so any one-shot state the handler
+      // staged (e.g. a bot-discovery baseline marked as injected) can now be
+      // committed. Reached only after a successful notify, so a delivery
+      // failure leaves that state intact to retry on the next message.
+      if (delivery.commit) await delivery.commit()
       // The event is now in the session's context — mark the source message
       // as received so the Feishu sender sees it landed. `markReceived`
       // swallows its own failures, so it never reaches the catch below.
@@ -351,6 +386,26 @@ export function createChannelCore(deps: ChannelCoreDeps): ChannelCore {
           const text = requireString(args, 'text')
           await deps.transport.editText(messageId, text)
           return toolText(`Edited ${messageId}.`)
+        }
+        case 'feishu_list_chat_bots': {
+          const chatId = requireString(args, 'chat_id')
+          const includeSelf = args.include_self === true
+          const appId = deps.transport.appId
+          const selfOpenId = deps.transport.botOpenId
+          const nowAt = now()
+          const bots = readChatBots(baseDir, appId, chatId)
+            .openIds.filter((openId) => includeSelf || openId !== selfOpenId)
+            .map((openId) => {
+              const identity = getBotIdentity(baseDir, appId, openId)
+              return {
+                name: identity?.name ?? openId,
+                open_id: openId,
+                source: identity?.source ?? 'observed',
+                last_seen: identity?.lastSeenAt ?? 0,
+                stale: identity ? nowAt - identity.lastSeenAt > BOT_STALE_MS : true,
+              }
+            })
+          return toolText(JSON.stringify(bots, null, 2))
         }
         default:
           return toolText(`Unknown tool: ${name}`, true)
@@ -451,6 +506,12 @@ const CHANNEL_INSTRUCTIONS = [
   'converts it to a Feishu @-mention that notifies the user.',
   'Use `react` to acknowledge a message with an emoji, and `edit_message` to revise a message',
   'you previously sent.',
+  '',
+  'Group chats may contain other bots you can collaborate with by @-mentioning their open_id',
+  '(<@open_id>). When you first join a group, and when a new bot is discovered, a one-time',
+  '【本群 bot 基线】/【本群新增 bot】/【发送方 bot】 note is prefixed to a delivered message listing',
+  'their names and open_ids. If your context was compacted and you no longer have a peer bot\'s',
+  'open_id, call `feishu_list_chat_bots` with the chat_id to look it up again.',
   '',
   'kind="doc_comment" — a comment on a Feishu document. Attributes:',
   '- file_token, file_type: the document the comment is on.',
