@@ -19,6 +19,11 @@ import { createInboundNotifier, defaultEventId, type TargetSelector } from './da
 import { openInboundQueue, type InboundQueue } from './daemon-queue'
 import { createChannelCore } from './server'
 import type { FeishuTransport } from './feishu'
+import {
+  acquireInstanceLockWithEviction,
+  releaseInstanceLock,
+  type EvictionResult,
+} from './instance-lock'
 
 export interface StartDaemonDeps {
   lockPath: string
@@ -37,11 +42,20 @@ export interface StartDaemonDeps {
   accessFile: string
   /** Path to the durable received/delivered inbound queue. */
   queueFile: string
+  /**
+   * Compatibility lock for pre-daemon feishu-channel servers. The daemon owns
+   * the real single-instance lock, but it also holds the legacy inbound lock so
+   * an old per-session server cannot keep a second Feishu WebSocket alive
+   * during plugin upgrades.
+   */
+  legacyInboundLockPath?: string
   baseDir?: string
   /** Routing policy; defaults to primary = first-registered proxy. */
   selectTarget?: TargetSelector
   /** Marks an inbound row delivered once a proxy ACKs (slice-2 persists). */
   onAck?(eventId: string): void
+  acquireLegacyInboundLock?(path: string): Promise<EvictionResult>
+  releaseLegacyInboundLock?(path: string): void
   now?(): number
   logInfo?(message: string): void
   logError?(message: string, err?: unknown): void
@@ -114,8 +128,33 @@ export async function startDaemon(deps: StartDaemonDeps): Promise<StartDaemonRes
     throw err
   }
 
-  // Open the Feishu connection last, once we can route what it delivers.
-  await deps.transport.start(core.routes)
+  let legacyInboundLockHeld = false
+  if (deps.legacyInboundLockPath) {
+    const acquireLegacyInboundLock = deps.acquireLegacyInboundLock ?? acquireInstanceLockWithEviction
+    const legacy = await acquireLegacyInboundLock(deps.legacyInboundLockPath)
+    if (!legacy.acquired) {
+      deps.logInfo?.(
+        `legacy inbound lock is still held by pid ${legacy.holderPid ?? 'unknown'}; standing down`,
+      )
+      await server.close()
+      await lock.handle.release()
+      return { started: false, reason: 'held' }
+    }
+    legacyInboundLockHeld = true
+    if (legacy.evicted) deps.logInfo?.('evicted an older per-session channel server')
+  }
+
+  try {
+    // Open the Feishu connection last, once we can route what it delivers.
+    await deps.transport.start(core.routes)
+  } catch (err) {
+    if (legacyInboundLockHeld) {
+      ;(deps.releaseLegacyInboundLock ?? releaseInstanceLock)(deps.legacyInboundLockPath!)
+    }
+    await server.close()
+    await lock.handle.release()
+    throw err
+  }
   replayPending(queue, route)
 
   const liveServer = server
@@ -125,6 +164,9 @@ export async function startDaemon(deps: StartDaemonDeps): Promise<StartDaemonRes
     close: async () => {
       await deps.transport.close()
       await liveServer.close()
+      if (legacyInboundLockHeld) {
+        ;(deps.releaseLegacyInboundLock ?? releaseInstanceLock)(deps.legacyInboundLockPath!)
+      }
       await lock.handle.release()
     },
   }

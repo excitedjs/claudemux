@@ -620,6 +620,7 @@ async function runDaemonMain(): Promise<void> {
     transport,
     accessFile: accessFile(base),
     queueFile: daemonInboundQueueFile(base),
+    legacyInboundLockPath: lockFile(base),
     baseDir: base,
     logInfo: defaultLogInfo,
     logError: defaultLogError,

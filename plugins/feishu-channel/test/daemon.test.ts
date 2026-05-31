@@ -101,4 +101,38 @@ describe('startDaemon (process body)', () => {
     expect(transport.sendText).toHaveBeenCalledWith('oc_1', 'hi')
     expect(result).toBeDefined()
   })
+
+  test('holds and releases the legacy inbound lock while the daemon owns Feishu', async () => {
+    const acquireLegacyInboundLock = vi.fn(async () => ({ acquired: true, evicted: true }))
+    const releaseLegacyInboundLock = vi.fn()
+
+    const { r, transport } = await boot({
+      legacyInboundLockPath: tmp('legacy.lock'),
+      acquireLegacyInboundLock,
+      releaseLegacyInboundLock,
+    })
+
+    expect(r.started).toBe(true)
+    expect(acquireLegacyInboundLock).toHaveBeenCalledTimes(1)
+    expect(transport.start).toHaveBeenCalledTimes(1)
+    if (r.started) await r.close()
+    expect(releaseLegacyInboundLock).toHaveBeenCalledTimes(1)
+    started.length = 0
+  })
+
+  test('stands down before opening Feishu when an old legacy holder cannot be evicted', async () => {
+    const acquireLegacyInboundLock = vi.fn(async () => ({
+      acquired: false as const,
+      holderPid: 4242,
+      evicted: false,
+    }))
+
+    const { r, transport } = await boot({
+      legacyInboundLockPath: tmp('legacy.lock'),
+      acquireLegacyInboundLock,
+    })
+
+    expect(r).toEqual({ started: false, reason: 'held' })
+    expect(transport.start).not.toHaveBeenCalled()
+  })
 })
