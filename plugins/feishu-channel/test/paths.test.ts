@@ -4,6 +4,7 @@ import {
   accessFile,
   botIdentityFile,
   chatBotsFile,
+  daemonInboundQueueFile,
   daemonLockFile,
   daemonSocketFile,
   envFile,
@@ -24,6 +25,7 @@ describe('paths', () => {
     expect(lockFile(base)).toBe(join(base, 'connection.lock'))
     expect(daemonSocketFile(base)).toBe(join(base, 'daemon.sock'))
     expect(daemonLockFile(base)).toBe(join(base, 'daemon.lock'))
+    expect(daemonInboundQueueFile(base)).toBe(join(base, 'daemon-inbound-queue.json'))
   })
 
   test('every state file sits inside the state directory', () => {
@@ -32,6 +34,7 @@ describe('paths', () => {
     expect(lockFile(base).startsWith(base + '/')).toBe(true)
     expect(daemonSocketFile(base).startsWith(base + '/')).toBe(true)
     expect(daemonLockFile(base).startsWith(base + '/')).toBe(true)
+    expect(daemonInboundQueueFile(base).startsWith(base + '/')).toBe(true)
   })
 
   test('stateDir can be overridden for a spawned daemon process', () => {

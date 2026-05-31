@@ -26,6 +26,8 @@ export interface DaemonConnectionDeps {
   send(message: DaemonToProxy): void
   /** Called when this proxy ACKs a delivery — slice-2 marks the row delivered. */
   onAck?(eventId: string): void
+  /** Called after this proxy registers; slice-2 replays pending durable rows. */
+  onRegister?(conn: DaemonConnection): void
   /** Records a recoverable error (defaults to stderr). */
   logError?(message: string, err?: unknown): void
 }
@@ -52,7 +54,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // Greet immediately so a newer proxy can detect a daemon it must upgrade past.
   deps.send({ t: 'hello', daemonVersion: deps.daemonVersion, generation: deps.generation })
 
-  return {
+  const conn: DaemonConnection = {
     get session() {
       return session
     },
@@ -65,10 +67,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       switch (message.t) {
         case 'register':
           session = {
-            sessionId: message.sessionId,
-            pid: message.pid,
-            proxyVersion: message.proxyVersion,
-          }
+          sessionId: message.sessionId,
+          pid: message.pid,
+          proxyVersion: message.proxyVersion,
+        }
+          deps.onRegister?.(conn)
           return
         case 'ack':
           deps.onAck?.(message.eventId)
@@ -96,4 +99,5 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       }
     },
   }
+  return conn
 }

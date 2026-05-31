@@ -48,15 +48,15 @@ describe('createInboundNotifier', () => {
     const a = fakeConn(sess('A'))
     const connections = new Set([a.conn])
     const notify = createInboundNotifier({ getConnections: () => connections })
-    notify('# hi', { message_id: 'om_1', event_id: 'evt_9' })
+    expect(notify('# hi', { message_id: 'om_1', event_id: 'evt_9' })).toBe(true)
     expect(a.delivered).toEqual([{ eventId: 'evt_9', content: '# hi', meta: { message_id: 'om_1', event_id: 'evt_9' } }])
   })
 
-  test('logs and drops when no proxy is registered (slice-1 is not yet no-loss)', () => {
+  test('logs and leaves pending when no proxy is registered', () => {
     const logInfo = vi.fn()
     const notify = createInboundNotifier({ getConnections: () => new Set(), logInfo })
-    notify('hi', { message_id: 'om_1' })
-    expect(logInfo).toHaveBeenCalledWith(expect.stringContaining('slice-2'))
+    expect(notify('hi', { message_id: 'om_1' })).toBe(false)
+    expect(logInfo).toHaveBeenCalledWith(expect.stringContaining('left pending'))
   })
 
   test('honors a custom selector (the seam slice-3 takeover replaces)', () => {

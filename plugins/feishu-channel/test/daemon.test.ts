@@ -52,6 +52,7 @@ describe('startDaemon (process body)', () => {
       self: self(socketPath),
       transport,
       accessFile: tmp('access.json'),
+      queueFile: tmp('queue.json'),
       baseDir: tmpdir(),
       ...over,
     })
@@ -77,6 +78,7 @@ describe('startDaemon (process body)', () => {
       self: self(socketPath),
       transport: fakeTransport(),
       accessFile: tmp('access.json'),
+      queueFile: tmp('queue.json'),
       baseDir: tmpdir(),
     })
     started.push(second)

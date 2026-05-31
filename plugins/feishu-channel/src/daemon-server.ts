@@ -38,6 +38,8 @@ export interface DaemonServerDeps {
   core: DaemonCore
   /** Marks an inbound row delivered once a proxy ACKs it (slice-2 persists this). */
   onAck?(eventId: string): void
+  /** Replays pending durable rows once a proxy registers. */
+  onRegister?(conn: DaemonConnection): void
   logError?(message: string, err?: unknown): void
 }
 
@@ -60,6 +62,7 @@ export function startDaemonServer(deps: DaemonServerDeps): Promise<DaemonServer>
       generation: deps.generation,
       core: deps.core,
       onAck: deps.onAck,
+      onRegister: deps.onRegister,
       logError,
       send: (message) => {
         if (!socket.destroyed) socket.write(encodeFrame(message))

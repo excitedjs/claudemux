@@ -46,6 +46,10 @@ export function daemonLockFile(base: string = stateDir()): string {
   return join(base, 'daemon.lock')
 }
 
+export function daemonInboundQueueFile(base: string = stateDir()): string {
+  return join(base, 'daemon-inbound-queue.json')
+}
+
 /**
  * feishu-bot-identity-{appId}.json — the app-wide `open_id → name` map for
  * peer bots. Keyed by the observing app only: a Feishu open_id is stable for a

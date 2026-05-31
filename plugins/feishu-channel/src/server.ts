@@ -37,7 +37,15 @@ import { generatePairingCode } from '@excitedjs/feishu-transport'
 import { startDaemon } from './daemon'
 import type { DaemonLockRecord } from './daemon-lock'
 import { startProxy, type ProxyHandle } from './proxy'
-import { accessFile, daemonLockFile, daemonSocketFile, envFile, lockFile, stateDir } from './paths'
+import {
+  accessFile,
+  daemonInboundQueueFile,
+  daemonLockFile,
+  daemonSocketFile,
+  envFile,
+  lockFile,
+  stateDir,
+} from './paths'
 import { ShutdownCoordinator } from './shutdown'
 
 /** Version advertised to Claude Code in the MCP `initialize` handshake. */
@@ -611,6 +619,7 @@ async function runDaemonMain(): Promise<void> {
     self,
     transport,
     accessFile: accessFile(base),
+    queueFile: daemonInboundQueueFile(base),
     baseDir: base,
     logInfo: defaultLogInfo,
     logError: defaultLogError,

@@ -15,7 +15,8 @@
 
 import { acquireDaemonLock, type AcquireDaemonLockDeps, type DaemonLockRecord } from './daemon-lock'
 import { DaemonAlreadyRunningError, startDaemonServer, type DaemonServer } from './daemon-server'
-import { createInboundNotifier, type TargetSelector } from './daemon-routing'
+import { createInboundNotifier, defaultEventId, type TargetSelector } from './daemon-routing'
+import { openInboundQueue, type InboundQueue } from './daemon-queue'
 import { createChannelCore } from './server'
 import type { FeishuTransport } from './feishu'
 
@@ -34,6 +35,8 @@ export interface StartDaemonDeps {
   transport: FeishuTransport
   /** Path to access.json (the host access policy the core reasons over). */
   accessFile: string
+  /** Path to the durable received/delivered inbound queue. */
+  queueFile: string
   baseDir?: string
   /** Routing policy; defaults to primary = first-registered proxy. */
   selectTarget?: TargetSelector
@@ -60,13 +63,21 @@ export async function startDaemon(deps: StartDaemonDeps): Promise<StartDaemonRes
   })
   if (!lock.acquired) return { started: false, reason: lock.reason }
 
-  // Lazy connection ref breaks the core<->server<->notify cycle: the notifier is
+  const queue = openInboundQueue(deps.queueFile)
+
+  // Lazy connection ref breaks the core<->server<->notify cycle: the router is
   // built before the server, but only reads connections at delivery time.
   let server: DaemonServer | null = null
-  const notify = createInboundNotifier({
+  const route = createInboundNotifier({
     getConnections: () => server?.connections ?? new Set(),
     selectTarget: deps.selectTarget,
     logInfo: deps.logInfo,
+  })
+  const notify = createDurableNotifier({
+    queue,
+    generation: deps.generation,
+    route,
+    now: deps.now ?? Date.now,
   })
 
   const core = createChannelCore({
@@ -85,7 +96,13 @@ export async function startDaemon(deps: StartDaemonDeps): Promise<StartDaemonRes
       daemonVersion: deps.daemonVersion,
       generation: deps.generation,
       core,
-      onAck: deps.onAck,
+      onAck: (eventId) => {
+        queue.markDelivered(eventId, (deps.now ?? Date.now)())
+        deps.onAck?.(eventId)
+      },
+      onRegister: () => {
+        replayPending(queue, route)
+      },
       logError: deps.logError,
     })
   } catch (err) {
@@ -99,6 +116,7 @@ export async function startDaemon(deps: StartDaemonDeps): Promise<StartDaemonRes
 
   // Open the Feishu connection last, once we can route what it delivers.
   await deps.transport.start(core.routes)
+  replayPending(queue, route)
 
   const liveServer = server
   return {
@@ -109,5 +127,33 @@ export async function startDaemon(deps: StartDaemonDeps): Promise<StartDaemonRes
       await liveServer.close()
       await lock.handle.release()
     },
+  }
+}
+
+function createDurableNotifier(deps: {
+  queue: InboundQueue
+  generation: number
+  now(): number
+  route(content: string, meta: Record<string, string>): boolean
+}): (content: string, meta: Record<string, string>) => void {
+  return (content, meta) => {
+    const eventId = defaultEventId(meta)
+    deps.queue.enqueue({
+      eventId,
+      content,
+      meta,
+      receivedAt: deps.now(),
+      byGeneration: deps.generation,
+    })
+    deps.route(content, meta)
+  }
+}
+
+function replayPending(
+  queue: InboundQueue,
+  route: (content: string, meta: Record<string, string>) => boolean,
+): void {
+  for (const row of queue.pending()) {
+    if (!route(row.content, row.meta)) return
   }
 }

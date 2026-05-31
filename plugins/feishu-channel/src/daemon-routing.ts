@@ -8,9 +8,9 @@
  * replace only the selector, never the deliver path. No host role (e.g.
  * "dispatcher") is hardcoded: "primary" is purely the first-registered proxy.
  *
- * Slice-1 is NOT yet no-loss: when no proxy is registered the event is
- * logged and dropped. The no-loss guarantee (durable queue keyed on the Feishu
- * idempotency key, drain-side persistence) lands in slice-2.
+ * Slice-2 pairs this fire-to-proxy path with a durable queue: the daemon
+ * persists the row before calling this router, and only marks it delivered
+ * after the proxy ACKs the Claude-facing notification write.
  */
 
 import type { DaemonConnection } from './daemon-connection'
@@ -53,14 +53,13 @@ export function defaultEventId(meta: Record<string, string>): string {
 }
 
 /**
- * Build the `ChannelNotifier` the daemon hands to its channel core: it routes a
- * gated inbound event to the selected proxy's `deliver`. Returns void — delivery
- * is fire-to-proxy; the no-loss/ack semantics live in the proxy ACK + (slice-2)
- * the durable queue.
+ * Build the router the daemon uses after it has persisted a received row. It
+ * returns whether a proxy was available for immediate delivery; when false, the
+ * caller leaves the row pending for a later proxy registration replay.
  */
 export function createInboundNotifier(
   deps: InboundNotifierDeps,
-): (content: string, meta: Record<string, string>) => void {
+): (content: string, meta: Record<string, string>) => boolean {
   const selectTarget = deps.selectTarget ?? selectPrimary
   const makeEventId = deps.makeEventId ?? defaultEventId
   const logInfo = deps.logInfo ?? (() => {})
@@ -68,11 +67,10 @@ export function createInboundNotifier(
   return (content, meta) => {
     const target = selectTarget(deps.getConnections(), meta)
     if (target === null) {
-      logInfo(
-        'no proxy registered — slice-1 drops this inbound (no-loss lands in slice-2 durable queue)',
-      )
-      return
+      logInfo('no proxy registered — inbound persisted and left pending')
+      return false
     }
     target.deliver(makeEventId(meta), content, meta)
+    return true
   }
 }
