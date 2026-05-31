@@ -13,7 +13,12 @@ import {
 } from '../src/server'
 import type { Access } from '../src/types'
 import { BOT_MEMBER_ADDED_EVENT_TYPE } from '../src/handlers/bot-member'
-import { markNeedsBaseline, readChatBots, recordChatMember } from '../src/chat-bots-store'
+import {
+  commitBaselineInjected,
+  markNeedsBaseline,
+  readChatBots,
+  recordChatMember,
+} from '../src/chat-bots-store'
 import { recordBotIdentity } from '../src/identity-store'
 import { FakeTransport } from './support/fake-transport'
 
@@ -252,6 +257,69 @@ describe('bot-discovery commit runs only after a successful notify', () => {
 
     expect(readChatBots(dir, transport.appId, 'oc_grp').baselineInjectedAt).toBeNull()
     expect(readChatBots(dir, transport.appId, 'oc_grp').needsBaselineOnNextMention).toBe(true)
+  })
+})
+
+describe('/introduce backfill after baseline → incremental delta', () => {
+  function introduceByHuman(): Record<string, unknown> {
+    return {
+      sender: { sender_id: { open_id: 'ou_human' }, sender_type: 'user' },
+      message: {
+        message_id: 'om_intro',
+        chat_id: 'oc_grp',
+        chat_type: 'group',
+        message_type: 'text',
+        content: JSON.stringify({ text: '@_user_1 @_user_2 /introduce' }),
+        mentions: [
+          { key: '@_user_1', id: { open_id: 'ou_self' }, name: 'Me' },
+          { key: '@_user_2', id: { open_id: 'ou_peer' }, name: 'PeerBot' },
+        ],
+      },
+    }
+  }
+  function mentionByHuman(messageId: string): Record<string, unknown> {
+    return {
+      sender: { sender_id: { open_id: 'ou_human' }, sender_type: 'user' },
+      message: {
+        message_id: messageId,
+        chat_id: 'oc_grp',
+        chat_type: 'group',
+        message_type: 'text',
+        content: '{"text":"anything"}',
+        mentions: [{ key: '@_user_1', id: { open_id: 'ou_self' } }],
+      },
+    }
+  }
+
+  test('a bot introduced after the baseline is delivered as a delta on the next mention, then cleared', async () => {
+    writeAccess({ groupPolicy: 'follow-user', allowFrom: ['ou_human'] })
+    const transport = new FakeTransport('ou_self')
+    commitBaselineInjected(dir, transport.appId, 'oc_grp', NOW) // baseline already injected
+    const notes: Note[] = []
+    const core = makeCore(transport, notes)
+
+    await core.handleEvent(IM_MESSAGE_EVENT_TYPE, introduceByHuman())
+    await core.handleEvent(IM_MESSAGE_EVENT_TYPE, mentionByHuman('om_next'))
+
+    const delta = notes.find((n) => n.meta.message_id === 'om_next')
+    expect(delta?.content).toContain('ou_peer')
+    expect(delta?.content).toContain('PeerBot')
+    // notify succeeded → pending cleared.
+    expect(readChatBots(dir, transport.appId, 'oc_grp').pendingNewBots).not.toContain('ou_peer')
+  })
+
+  test('a failed notify keeps the introduced bot pending for the next mention', async () => {
+    writeAccess({ groupPolicy: 'follow-user', allowFrom: ['ou_human'] })
+    const transport = new FakeTransport('ou_self')
+    commitBaselineInjected(dir, transport.appId, 'oc_grp', NOW)
+    const core = makeCore(transport, [], [], () => {
+      throw new Error('notify failed')
+    })
+
+    await core.handleEvent(IM_MESSAGE_EVENT_TYPE, introduceByHuman())
+    await core.handleEvent(IM_MESSAGE_EVENT_TYPE, mentionByHuman('om_next'))
+
+    expect(readChatBots(dir, transport.appId, 'oc_grp').pendingNewBots).toContain('ou_peer')
   })
 })
 

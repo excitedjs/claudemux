@@ -15,7 +15,7 @@ import { parseInbound } from '../content'
 import type { ChannelDelivery, EventHandler, HandlerContext } from '../events'
 import { asString, isRecord } from '../json'
 import { recordBotIdentity } from '../identity-store'
-import { readChatBots, recordChatMember } from '../chat-bots-store'
+import { enqueuePendingNewBot, readChatBots, recordChatMember } from '../chat-bots-store'
 import { buildDiscoveryContext, observeBotSender } from '../bot-discovery'
 import type { Mention } from '../types'
 
@@ -278,9 +278,15 @@ async function handleIntroduce(event: FeishuInboundEvent, ctx: HandlerContext): 
   try {
     recordBotIdentity(ctx.baseDir, ctx.transport.appId, event.chatId, external, 'introduce', ctx.now())
     for (const b of external) {
-      recordChatMember(ctx.baseDir, ctx.transport.appId, event.chatId, b.openId, {
+      const { wasNew } = recordChatMember(ctx.baseDir, ctx.transport.appId, event.chatId, b.openId, {
         introduced: true,
       })
+      // /introduce is the backfill path: a bot learned here that the chat has
+      // not seen before must still reach the model. If the baseline is already
+      // injected it won't be re-listed, so queue it for the next incremental
+      // delta — mirroring auto-observe. A bot already in the chat is not
+      // re-queued.
+      if (wasNew) enqueuePendingNewBot(ctx.baseDir, ctx.transport.appId, event.chatId, b.openId)
     }
   } catch (err) {
     ctx.logError('/introduce: failed to persist observed bots', err)

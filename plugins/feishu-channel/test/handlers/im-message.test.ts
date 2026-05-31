@@ -9,7 +9,7 @@ import {
   createImMessageHandler,
   normalizeInboundEvent,
 } from '../../src/handlers/im-message'
-import { readChatBots, recordChatMember } from '../../src/chat-bots-store'
+import { commitBaselineInjected, readChatBots, recordChatMember } from '../../src/chat-bots-store'
 import type { Access } from '../../src/types'
 import { FakeTransport } from '../support/fake-transport'
 
@@ -886,5 +886,34 @@ describe('createImMessageHandler — /introduce command', () => {
     expect(logErrors.some((m) => m.includes('/introduce'))).toBe(true)
     // Store write happened before the ack attempt
     expect(readChatBots(dir, transport.appId, 'oc_grp').openIds.length).toBeGreaterThan(0)
+  })
+
+  test('a bot newly learned via /introduce after the baseline is queued for the next delta', async () => {
+    // Regression: /introduce is the backfill path when auto-observe missed a bot.
+    // If the baseline is already injected, the introduced bot must still reach the
+    // model as an incremental delta — so it has to land in pendingNewBots.
+    writeAccess({ groupPolicy: 'allowlist', groups: { oc_grp: { requireMention: false, allowFrom: [] } } })
+    const transport = new FakeTransport('ou_self')
+    commitBaselineInjected(dir, transport.appId, 'oc_grp', NOW) // baseline already done
+    const handler = createImMessageHandler()
+
+    await handler.handle(introduceEvent('/introduce'), makeCtx(transport))
+
+    const state = readChatBots(dir, transport.appId, 'oc_grp')
+    expect(state.introducedOpenIds).toContain('ou_peer')
+    expect(state.pendingNewBots).toContain('ou_peer')
+  })
+
+  test('a bot already known is not re-queued by /introduce', async () => {
+    writeAccess({ groupPolicy: 'allowlist', groups: { oc_grp: { requireMention: false, allowFrom: [] } } })
+    const transport = new FakeTransport('ou_self')
+    // ou_peer is already a known member with its pending already consumed.
+    recordChatMember(dir, transport.appId, 'oc_grp', 'ou_peer')
+    commitBaselineInjected(dir, transport.appId, 'oc_grp', NOW)
+    const handler = createImMessageHandler()
+
+    await handler.handle(introduceEvent('/introduce'), makeCtx(transport))
+
+    expect(readChatBots(dir, transport.appId, 'oc_grp').pendingNewBots).not.toContain('ou_peer')
   })
 })
