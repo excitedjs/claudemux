@@ -120,7 +120,7 @@ export interface ChannelCore {
 }
 
 /** The outbound tools the channel exposes to Claude. */
-const CHANNEL_TOOLS: Tool[] = [
+export const CHANNEL_TOOLS: Tool[] = [
   {
     name: 'reply',
     description:
