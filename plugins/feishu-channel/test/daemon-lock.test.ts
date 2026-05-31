@@ -98,6 +98,25 @@ describe('daemon-lock acquisition (proper-lockfile)', () => {
     expect(results.filter((r) => r.acquired)).toHaveLength(1)
     expect(results.filter((r) => !r.acquired && r.reason === 'held')).toHaveLength(5)
   }, 10_000)
+
+  test('N independent processes racing a stale lock → exactly one reclaims it', async () => {
+    const lockPath = tmp('lock')
+    const socketPath = tmp('sock')
+    const barrierPath = tmp('barrier')
+    const worker = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'daemon-lock-racer.ts')
+    mkdirSync(`${lockPath}.lock`)
+    const old = new Date(Date.now() - 60_000)
+    utimesSync(`${lockPath}.lock`, old, old)
+
+    const racers = Array.from({ length: 6 }, (_, i) =>
+      runRacer(worker, lockPath, socketPath, barrierPath, 9100 + i),
+    )
+    writeFileSync(barrierPath, 'go')
+    const results = await Promise.all(racers)
+
+    expect(results.filter((r) => r.acquired)).toHaveLength(1)
+    expect(results.filter((r) => !r.acquired && r.reason === 'held')).toHaveLength(5)
+  }, 10_000)
 })
 
 describe('probeDaemonSocket (ppid-independent liveness)', () => {
