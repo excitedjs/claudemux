@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from 'vitest'
-import { existsSync, mkdirSync, utimesSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { acquireDaemonLock, probeDaemonSocket, type DaemonLockRecord } from '../src/daemon-lock'
 import { startDaemonServer, type DaemonServer } from '../src/daemon-server'
@@ -80,6 +82,22 @@ describe('daemon-lock acquisition (proper-lockfile)', () => {
 
     for (const r of results) if (r.acquired) await r.handle.release()
   })
+
+  test('N independent processes racing the same lock → exactly one acquired', async () => {
+    const lockPath = tmp('lock')
+    const socketPath = tmp('sock')
+    const barrierPath = tmp('barrier')
+    const worker = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'daemon-lock-racer.ts')
+
+    const racers = Array.from({ length: 6 }, (_, i) =>
+      runRacer(worker, lockPath, socketPath, barrierPath, 9000 + i),
+    )
+    writeFileSync(barrierPath, 'go')
+    const results = await Promise.all(racers)
+
+    expect(results.filter((r) => r.acquired)).toHaveLength(1)
+    expect(results.filter((r) => !r.acquired && r.reason === 'held')).toHaveLength(5)
+  }, 10_000)
 })
 
 describe('probeDaemonSocket (ppid-independent liveness)', () => {
@@ -104,3 +122,40 @@ describe('probeDaemonSocket (ppid-independent liveness)', () => {
     await expect(probeDaemonSocket(tmp('sock'), 200)).resolves.toBe(false)
   })
 })
+
+function runRacer(
+  worker: string,
+  lockPath: string,
+  socketPath: string,
+  barrierPath: string,
+  pid: number,
+): Promise<{ acquired: true } | { acquired: false; reason: 'held' | 'serving' }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--import', 'tsx', worker, lockPath, socketPath, barrierPath, String(pid)], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk
+    })
+    child.on('error', reject)
+    child.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`racer exited ${code}: ${stderr}`))
+        return
+      }
+      const line = stdout.trim().split('\n').at(-1)
+      if (!line) {
+        reject(new Error(`racer produced no output: ${stderr}`))
+        return
+      }
+      resolve(JSON.parse(line) as { acquired: true } | { acquired: false; reason: 'held' | 'serving' })
+    })
+  })
+}

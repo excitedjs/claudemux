@@ -342,6 +342,12 @@ export interface FeishuTransportOptions {
    * transport directly.
    */
   singleInstance?: boolean
+  /**
+   * Test seam for the inbound WebSocket open. Production leaves this unset so
+   * `openInbound` uses the Feishu SDK; unit tests use it to assert daemon-mode
+   * lock-free startup without opening a real socket.
+   */
+  openInboundForTest?: (routes: InboundRoutes) => Promise<void>
 }
 
 /**
@@ -380,6 +386,11 @@ export function createFeishuTransport(
    * holder released or crashed.
    */
   async function openInbound(routes: InboundRoutes): Promise<void> {
+    if (options.openInboundForTest) {
+      await options.openInboundForTest(routes)
+      return
+    }
+
     resolvedBotOpenId = await resolveBotOpenId(client)
     const dispatcher = new lark.EventDispatcher({ logger: sdkLogger }).register(routes)
 

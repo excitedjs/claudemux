@@ -5,7 +5,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 
 import { startDaemonServer, type DaemonServer } from '../src/daemon-server'
 import { startProxy, type ProxyHandle, type ProxyMcpServer } from '../src/proxy'
-import { CHANNEL_TOOLS, channelNotification } from '../src/server'
+import { CHANNEL_TOOLS, channelNotification, connectProxyOrSpawnDaemon } from '../src/server'
 
 async function waitFor(pred: () => boolean, ms = 1000): Promise<void> {
   const start = Date.now()
@@ -81,5 +81,38 @@ describe('thin proxy MCP wiring', () => {
     conn.deliver('evt_1', '# done', { message_id: 'om_9' })
     await waitFor(() => mcp.notifications.length === 1)
     expect(mcp.notifications[0]).toEqual(channelNotification('# done', { message_id: 'om_9' }))
+  })
+})
+
+describe('connectProxyOrSpawnDaemon', () => {
+  test('spawns the daemon once, then retries the proxy connection until it succeeds', async () => {
+    const mcp = fakeMcp()
+    const handle = {
+      connection: { close: vi.fn(), client: { callTool: vi.fn() } },
+      close: vi.fn(),
+    } as unknown as ProxyHandle
+    const startProxyFn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('socket missing'))
+      .mockResolvedValueOnce(handle)
+    const spawnDaemonProcessFn = vi.fn()
+    const sleepFn = vi.fn(async () => {})
+    let tick = 0
+
+    const result = await connectProxyOrSpawnDaemon({
+      socketPath: '/tmp/feishu.sock',
+      mcpServer: mcp.server,
+      baseDir: '/tmp/feishu-state',
+      startProxyFn,
+      spawnDaemonProcessFn,
+      sleepFn,
+      now: () => 1000 + tick++,
+    })
+
+    expect(result).toBe(handle)
+    expect(startProxyFn).toHaveBeenCalledTimes(2)
+    expect(spawnDaemonProcessFn).toHaveBeenCalledTimes(1)
+    expect(spawnDaemonProcessFn).toHaveBeenCalledWith('/tmp/feishu-state')
+    expect(sleepFn).toHaveBeenCalledWith(100)
   })
 })

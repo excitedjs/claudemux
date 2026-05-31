@@ -665,16 +665,24 @@ interface ConnectProxyDeps {
   socketPath: string
   mcpServer: Parameters<typeof startProxy>[0]['mcpServer']
   baseDir: string
+  startProxyFn?: typeof startProxy
+  spawnDaemonProcessFn?: typeof spawnDaemonProcess
+  sleepFn?: typeof sleep
+  now?: () => number
 }
 
-async function connectProxyOrSpawnDaemon(deps: ConnectProxyDeps): Promise<ProxyHandle> {
-  const deadline = Date.now() + DAEMON_STARTUP_TIMEOUT_MS
+export async function connectProxyOrSpawnDaemon(deps: ConnectProxyDeps): Promise<ProxyHandle> {
+  const startProxyFn = deps.startProxyFn ?? startProxy
+  const spawnDaemonProcessFn = deps.spawnDaemonProcessFn ?? spawnDaemonProcess
+  const sleepFn = deps.sleepFn ?? sleep
+  const now = deps.now ?? Date.now
+  const deadline = now() + DAEMON_STARTUP_TIMEOUT_MS
   let spawned = false
   let lastError: unknown
 
-  while (Date.now() <= deadline) {
+  while (now() <= deadline) {
     try {
-      return await startProxy({
+      return await startProxyFn({
         socketPath: deps.socketPath,
         sessionId: sessionId(),
         pid: process.pid,
@@ -685,10 +693,10 @@ async function connectProxyOrSpawnDaemon(deps: ConnectProxyDeps): Promise<ProxyH
     } catch (err) {
       lastError = err
       if (!spawned) {
-        spawnDaemonProcess(deps.baseDir)
+        spawnDaemonProcessFn(deps.baseDir)
         spawned = true
       }
-      await sleep(DAEMON_CONNECT_RETRY_MS)
+      await sleepFn(DAEMON_CONNECT_RETRY_MS)
     }
   }
 

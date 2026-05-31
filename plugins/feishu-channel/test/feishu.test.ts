@@ -136,11 +136,14 @@ function stubClient() {
   }
 }
 
-function buildTransport(stub: ReturnType<typeof stubClient>) {
+function buildTransport(
+  stub: ReturnType<typeof stubClient>,
+  options: Parameters<typeof createFeishuTransport>[2] = {},
+) {
   return createFeishuTransport(
     { appId: 'app', appSecret: 'secret' },
     '/tmp/test-feishu-channel.lock',
-    { client: stub.client },
+    { client: stub.client, ...options },
   )
 }
 
@@ -198,6 +201,19 @@ describe('createFeishuTransport — sendText', () => {
     expect(stub.create.mock.calls.length).toBeGreaterThanOrEqual(2)
     expect(result.messageIds[0]).toBe('om_a')
     expect(result.messageIds[1]).toBe('om_b')
+  })
+})
+
+describe('createFeishuTransport — inbound startup', () => {
+  test('daemon mode opens inbound without the legacy instance-lock election', async () => {
+    const stub = stubClient()
+    const openInboundForTest = vi.fn(async () => {})
+    const transport = buildTransport(stub, { singleInstance: false, openInboundForTest })
+    const routes = { 'im.message.receive_v1': async () => {} }
+
+    await transport.start(routes)
+
+    expect(openInboundForTest).toHaveBeenCalledWith(routes)
   })
 })
 
