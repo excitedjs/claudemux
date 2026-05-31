@@ -15,7 +15,7 @@
 
 import { acquireDaemonLock, type AcquireDaemonLockDeps, type DaemonLockRecord } from './daemon-lock'
 import { DaemonAlreadyRunningError, startDaemonServer, type DaemonServer } from './daemon-server'
-import { createInboundNotifier, defaultEventId, type TargetSelector } from './daemon-routing'
+import { createInboundNotifier, defaultEventId } from './daemon-routing'
 import { openInboundQueue, type InboundQueue } from './daemon-queue'
 import { createChannelCore } from './server'
 import type { FeishuTransport } from './feishu'
@@ -24,6 +24,7 @@ import {
   releaseInstanceLock,
   type EvictionResult,
 } from './instance-lock'
+import { ChannelOwnerState } from './channel-owner'
 
 export interface StartDaemonDeps {
   lockPath: string
@@ -50,8 +51,6 @@ export interface StartDaemonDeps {
    */
   legacyInboundLockPath?: string
   baseDir?: string
-  /** Routing policy; defaults to primary = first-registered proxy. */
-  selectTarget?: TargetSelector
   /** Marks an inbound row delivered once a proxy ACKs (slice-2 persists). */
   onAck?(eventId: string): void
   acquireLegacyInboundLock?(path: string): Promise<EvictionResult>
@@ -78,15 +77,18 @@ export async function startDaemon(deps: StartDaemonDeps): Promise<StartDaemonRes
   if (!lock.acquired) return { started: false, reason: lock.reason }
 
   const queue = openInboundQueue(deps.queueFile)
+  let routePending = () => {}
+  const owner = new ChannelOwnerState(() => routePending())
 
   // Lazy connection ref breaks the core<->server<->notify cycle: the router is
   // built before the server, but only reads connections at delivery time.
   let server: DaemonServer | null = null
   const route = createInboundNotifier({
     getConnections: () => server?.connections ?? new Set(),
-    selectTarget: deps.selectTarget,
+    selectTarget: (connections) => owner.select(connections),
     logInfo: deps.logInfo,
   })
+  routePending = () => replayPending(queue, route)
   const notify = createDurableNotifier({
     queue,
     generation: deps.generation,
@@ -114,9 +116,12 @@ export async function startDaemon(deps: StartDaemonDeps): Promise<StartDaemonRes
         queue.markDelivered(eventId, (deps.now ?? Date.now)())
         deps.onAck?.(eventId)
       },
-      onRegister: () => {
+      onRegister: (conn) => {
+        owner.register(conn)
         replayPending(queue, route)
       },
+      handleOwnershipTool: (conn, name, args) =>
+        owner.handleTool(conn, name, args, server?.connections ?? new Set()),
       logError: deps.logError,
     })
   } catch (err) {

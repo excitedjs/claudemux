@@ -17,6 +17,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 
 import { connectToDaemon, type ProxyConnection } from './proxy-transport'
 import { CHANNEL_TOOLS, channelNotification } from './server'
+import { CHANNEL_OWNER_TOOLS } from './channel-owner'
 
 /** The slice of the MCP `Server` the proxy drives (lets tests inject a fake). */
 export interface ProxyMcpServer {
@@ -61,7 +62,9 @@ export async function startProxy(deps: StartProxyDeps): Promise<ProxyHandle> {
 
   // Tool surface is static; forward each call to the daemon, which runs it
   // against the real transport and returns the CallToolResult.
-  deps.mcpServer.setRequestHandler(ListToolsRequestSchema, () => ({ tools: CHANNEL_TOOLS }))
+  deps.mcpServer.setRequestHandler(ListToolsRequestSchema, () => ({
+    tools: [...CHANNEL_TOOLS, ...CHANNEL_OWNER_TOOLS],
+  }))
   deps.mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
     const result = await connection.client.callTool(request.params.name, request.params.arguments ?? {})
     return result as CallToolResult

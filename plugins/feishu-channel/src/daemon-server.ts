@@ -14,6 +14,7 @@ import { unlinkSync } from 'node:fs'
 import { createDaemonConnection, type DaemonConnection, type DaemonCore } from './daemon-connection'
 import { probeDaemonSocket } from './daemon-lock'
 import { FrameDecoder, encodeFrame, type ProxyToDaemon } from './ipc'
+import type { OwnershipToolResult } from './channel-owner'
 
 /**
  * Thrown when the socket is already bound by a *live* daemon — the atomic
@@ -40,6 +41,12 @@ export interface DaemonServerDeps {
   onAck?(eventId: string): void
   /** Replays pending durable rows once a proxy registers. */
   onRegister?(conn: DaemonConnection): void
+  /** Handles daemon-local channel ownership tools before forwarding to core. */
+  handleOwnershipTool?(
+    conn: DaemonConnection,
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<OwnershipToolResult>
   logError?(message: string, err?: unknown): void
 }
 
@@ -63,6 +70,7 @@ export function startDaemonServer(deps: DaemonServerDeps): Promise<DaemonServer>
       core: deps.core,
       onAck: deps.onAck,
       onRegister: deps.onRegister,
+      handleOwnershipTool: deps.handleOwnershipTool,
       logError,
       send: (message) => {
         if (!socket.destroyed) socket.write(encodeFrame(message))

@@ -15,6 +15,7 @@ function connect(opts: {
   deliverToClaude(content: string, meta: Record<string, string>): Promise<void>
   onAck?(eventId: string): void
   role?: 'dispatcher' | 'session'
+  handleOwnershipTool?: Parameters<typeof createDaemonConnection>[0]['handleOwnershipTool']
 }) {
   const queue: Array<['proxy', DaemonToProxy] | ['daemon', ProxyToDaemon]> = []
 
@@ -23,6 +24,7 @@ function connect(opts: {
     generation: 1,
     core: opts.core,
     onAck: opts.onAck,
+    handleOwnershipTool: opts.handleOwnershipTool,
     send: (m) => queue.push(['proxy', m]),
   })
   const proxyClient = createProxyClient({
@@ -74,6 +76,28 @@ describe('daemon <-> proxy protocol', () => {
     await pump()
     await expect(call).resolves.toEqual({ ran: 'reply', echoed: { chat_id: 'oc_x', text: 'hi' } })
     expect(handleTool).toHaveBeenCalledWith('reply', { chat_id: 'oc_x', text: 'hi' })
+  })
+
+  test('handles channel ownership tools in the daemon without forwarding to core', async () => {
+    const handleTool = vi.fn(async () => ({ should: 'not run' }))
+    const handleOwnershipTool = vi.fn(async () => ({
+      handled: true as const,
+      result: { content: [{ type: 'text' as const, text: 'owner changed' }] },
+    }))
+    const { proxyClient, daemonConn, pump } = connect({
+      core: { handleTool },
+      handleOwnershipTool,
+      deliverToClaude: async () => {},
+    })
+    proxyClient.register()
+    await pump()
+
+    const call = proxyClient.callTool('feishu_channel_acquire', {})
+    await pump()
+
+    await expect(call).resolves.toEqual({ content: [{ type: 'text', text: 'owner changed' }] })
+    expect(handleOwnershipTool).toHaveBeenCalledWith(daemonConn, 'feishu_channel_acquire', {})
+    expect(handleTool).not.toHaveBeenCalled()
   })
 
   test('a throwing tool surfaces as a rejected callTool', async () => {

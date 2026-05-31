@@ -6,6 +6,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { startDaemonServer, type DaemonServer } from '../src/daemon-server'
 import { startProxy, type ProxyHandle, type ProxyMcpServer } from '../src/proxy'
 import { CHANNEL_TOOLS, channelNotification, connectProxyOrSpawnDaemon } from '../src/server'
+import { CHANNEL_OWNER_TOOLS } from '../src/channel-owner'
 
 async function waitFor(pred: () => boolean, ms = 1000): Promise<void> {
   const start = Date.now()
@@ -60,10 +61,10 @@ describe('thin proxy MCP wiring', () => {
     return { mcp, handleTool }
   }
 
-  test('ListTools returns the static channel tool surface', async () => {
+  test('ListTools returns channel tools plus daemon-local ownership tools', async () => {
     const { mcp } = await boot()
     const list = (await mcp.handlers.get(ListToolsRequestSchema)!({ params: { name: '' } })) as { tools: unknown }
-    expect(list.tools).toBe(CHANNEL_TOOLS)
+    expect(list.tools).toEqual([...CHANNEL_TOOLS, ...CHANNEL_OWNER_TOOLS])
   })
 
   test('a CallTool forwards through the daemon and returns its result', async () => {

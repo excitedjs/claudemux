@@ -9,6 +9,7 @@
  */
 
 import type { DaemonToProxy, ProxyToDaemon } from './ipc'
+import type { OwnershipToolResult } from './channel-owner'
 
 /** The slice of the channel core the daemon needs to run a forwarded tool call. */
 export interface DaemonCore {
@@ -28,6 +29,12 @@ export interface DaemonConnectionDeps {
   onAck?(eventId: string): void
   /** Called after this proxy registers; slice-2 replays pending durable rows. */
   onRegister?(conn: DaemonConnection): void
+  /** Handles daemon-local channel ownership tools before forwarding to core. */
+  handleOwnershipTool?(
+    conn: DaemonConnection,
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<OwnershipToolResult>
   /** Records a recoverable error (defaults to stderr). */
   logError?(message: string, err?: unknown): void
 }
@@ -80,6 +87,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           return
         case 'tool': {
           try {
+            const ownership = await deps.handleOwnershipTool?.(conn, message.name, message.args)
+            if (ownership?.handled) {
+              deps.send({ t: 'tool_result', id: message.id, ok: true, result: ownership.result })
+              return
+            }
             const result = await deps.core.handleTool(message.name, message.args)
             deps.send({ t: 'tool_result', id: message.id, ok: true, result })
           } catch (err) {
