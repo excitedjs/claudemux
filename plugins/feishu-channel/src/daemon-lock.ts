@@ -53,6 +53,7 @@ export interface AcquireDaemonLockDeps {
    */
   staleMs?: number
   logInfo?(message: string): void
+  logError?(message: string, err?: unknown): void
 }
 
 export interface DaemonLockHandle {
@@ -73,6 +74,7 @@ export type AcquireResult =
 export async function acquireDaemonLock(deps: AcquireDaemonLockDeps): Promise<AcquireResult> {
   const probe = deps.probe ?? ((p: string) => probeDaemonSocket(p))
   const logInfo = deps.logInfo ?? (() => {})
+  const logError = deps.logError ?? (() => {})
 
   let release: () => Promise<void>
   try {
@@ -82,9 +84,17 @@ export async function acquireDaemonLock(deps: AcquireDaemonLockDeps): Promise<Ac
     release = await lockfile.lock(deps.lockPath, {
       stale: deps.staleMs ?? 15_000,
       realpath: false,
+      onCompromised: (err: Error) => {
+        logError('daemon lock compromised; relying on socket arbitration', err)
+      },
     })
   } catch (err) {
-    if ((err as { code?: string }).code === 'ELOCKED') return { acquired: false, reason: 'held' }
+    const code = (err as { code?: string }).code
+    if (code === 'ELOCKED') return { acquired: false, reason: 'held' }
+    // During a stale-lock steal, another contender can remove the lock dir
+    // between our mkdir success and proper-lockfile's mtime probe. Treat that
+    // as "did not acquire a stable lock" rather than crashing the starter.
+    if (code === 'ENOENT') return { acquired: false, reason: 'held' }
     throw err
   }
 

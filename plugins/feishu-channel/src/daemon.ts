@@ -73,6 +73,7 @@ export async function startDaemon(deps: StartDaemonDeps): Promise<StartDaemonRes
     probe: deps.probe,
     staleMs: deps.staleMs,
     logInfo: deps.logInfo,
+    logError: deps.logError,
   })
   if (!lock.acquired) return { started: false, reason: lock.reason }
 
