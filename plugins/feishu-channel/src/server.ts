@@ -734,12 +734,30 @@ function proxyRole(): 'dispatcher' | 'session' {
     : 'session'
 }
 
-export function stableProxySessionId(role: 'dispatcher' | 'session', cwd: string = process.cwd()): string {
-  const explicit = process.env.FEISHU_CHANNEL_SESSION_ID
-  if (explicit && /^[A-Za-z0-9._:-]+$/.test(explicit)) return `${role}:${explicit}`
-  const resolved = safeRealpath(cwd)
-  const digest = createHash('sha256').update(`${role}\0${resolved}`).digest('hex').slice(0, 16)
+export function stableProxySessionId(
+  role: 'dispatcher' | 'session',
+  cwd: string = process.cwd(),
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const explicit = sessionToken(env.FEISHU_CHANNEL_SESSION_ID)
+  if (explicit !== null) return `${role}:${explicit}`
+  const claudeSessionId = sessionToken(env.CLAUDE_CODE_SESSION_ID)
+  if (claudeSessionId !== null) return hashedProxySessionId(role, `claude-code-session\0${claudeSessionId}`)
+  const projectDir = env.CLAUDE_PROJECT_DIR
+  const initCwd = env.INIT_CWD
+  const fallbackCwd =
+    projectDir && projectDir.length > 0 ? projectDir : initCwd && initCwd.length > 0 ? initCwd : cwd
+  const resolved = safeRealpath(fallbackCwd)
+  return hashedProxySessionId(role, `cwd\0${resolved}`)
+}
+
+function hashedProxySessionId(role: 'dispatcher' | 'session', source: string): string {
+  const digest = createHash('sha256').update(`${role}\0${source}`).digest('hex').slice(0, 16)
   return `${role}:${digest}`
+}
+
+function sessionToken(value: string | undefined): string | null {
+  return value && /^[A-Za-z0-9._:-]+$/.test(value) ? value : null
 }
 
 function safeRealpath(path: string): string {

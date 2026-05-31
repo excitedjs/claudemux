@@ -130,4 +130,37 @@ describe('stableProxySessionId', () => {
   test('distinguishes dispatcher and teammate roles for the same cwd', () => {
     expect(stableProxySessionId('dispatcher', '/tmp/repo-a')).not.toBe(stableProxySessionId('session', '/tmp/repo-a'))
   })
+
+  test('uses Claude Code session id before cwd so npm --prefix proxy launches stay per-session unique', () => {
+    const cwd = '/tmp/shared-plugin-root'
+    expect(stableProxySessionId('session', cwd, { CLAUDE_CODE_SESSION_ID: 'claude-session-a' })).toBe(
+      stableProxySessionId('session', cwd, { CLAUDE_CODE_SESSION_ID: 'claude-session-a' }),
+    )
+    expect(stableProxySessionId('session', cwd, { CLAUDE_CODE_SESSION_ID: 'claude-session-a' })).not.toBe(
+      stableProxySessionId('session', cwd, { CLAUDE_CODE_SESSION_ID: 'claude-session-b' }),
+    )
+  })
+
+  test('keeps FEISHU_CHANNEL_SESSION_ID as the explicit override', () => {
+    expect(
+      stableProxySessionId('session', '/tmp/shared-plugin-root', {
+        FEISHU_CHANNEL_SESSION_ID: 'tm-1',
+        CLAUDE_CODE_SESSION_ID: 'claude-session-a',
+      }),
+    ).toBe('session:tm-1')
+  })
+
+  test('falls back to CLAUDE_PROJECT_DIR instead of npm --prefix cwd when Claude session id is unavailable', () => {
+    const pluginRoot = '/tmp/shared-plugin-root'
+    expect(stableProxySessionId('session', pluginRoot, { CLAUDE_PROJECT_DIR: '/tmp/repo-a' })).not.toBe(
+      stableProxySessionId('session', pluginRoot, { CLAUDE_PROJECT_DIR: '/tmp/repo-b' }),
+    )
+  })
+
+  test('uses INIT_CWD as the next fallback for non-Claude hosts', () => {
+    const pluginRoot = '/tmp/shared-plugin-root'
+    expect(stableProxySessionId('session', pluginRoot, { INIT_CWD: '/tmp/repo-a' })).not.toBe(
+      stableProxySessionId('session', pluginRoot, { INIT_CWD: '/tmp/repo-b' }),
+    )
+  })
 })
