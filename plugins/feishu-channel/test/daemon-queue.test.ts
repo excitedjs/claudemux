@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
@@ -108,5 +108,68 @@ describe('openInboundQueue', () => {
         byGeneration: 2,
       },
     ])
+  })
+
+  test('ignores a torn tail left by a crashed append', () => {
+    const path = tmp()
+    writeFileSync(
+      path,
+      '{"t":"received","eventId":"evt_1","content":"hello","meta":{"event_id":"evt_1"},"receivedAt":100,"byGeneration":1}\n{"t":"received","eventId"',
+    )
+
+    expect(openInboundQueue(path).pending()).toEqual([
+      {
+        eventId: 'evt_1',
+        content: 'hello',
+        meta: { event_id: 'evt_1' },
+        receivedAt: 100,
+        byGeneration: 1,
+      },
+    ])
+  })
+
+  test('repairs a torn tail before appending a new event', () => {
+    const path = tmp()
+    writeFileSync(
+      path,
+      '{"t":"received","eventId":"evt_1","content":"hello","meta":{"event_id":"evt_1"},"receivedAt":100,"byGeneration":1}\n{"t":"received","eventId"',
+    )
+
+    const q = openInboundQueue(path)
+    q.enqueue({
+      eventId: 'evt_2',
+      content: 'after crash',
+      meta: { event_id: 'evt_2' },
+      receivedAt: 101,
+      byGeneration: 2,
+    })
+
+    expect(openInboundQueue(path).pending().map((r) => r.eventId)).toEqual(['evt_1', 'evt_2'])
+    expect(readFileSync(path, 'utf8')).not.toContain('{"t":"received","eventId"{"t":"received"')
+  })
+
+  test('adds a delimiter when appending after a valid final line without newline', () => {
+    const path = tmp()
+    writeFileSync(
+      path,
+      '{"t":"received","eventId":"evt_1","content":"hello","meta":{"event_id":"evt_1"},"receivedAt":100,"byGeneration":1}',
+    )
+
+    openInboundQueue(path).enqueue({
+      eventId: 'evt_2',
+      content: 'next',
+      meta: { event_id: 'evt_2' },
+      receivedAt: 101,
+      byGeneration: 2,
+    })
+
+    expect(openInboundQueue(path).pending().map((r) => r.eventId)).toEqual(['evt_1', 'evt_2'])
+  })
+
+  test('rejects corrupt complete lines before the tail', () => {
+    const path = tmp()
+    writeFileSync(path, '{"t":"received","eventId"\n{}\n')
+
+    expect(() => openInboundQueue(path).pending()).toThrow()
   })
 })

@@ -13,7 +13,7 @@
  * facts to the same durable queue without a last-writer-wins rename race.
  */
 
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, truncateSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 export interface InboundQueueRow {
@@ -69,10 +69,19 @@ export function openInboundQueue(path: string): InboundQueue {
 function readRows(path: string): InboundQueueRow[] {
   try {
     const rows = new Map<string, InboundQueueRow>()
-    for (const [idx, line] of readFileSync(path, 'utf8').split('\n').entries()) {
+    const text = readFileSync(path, 'utf8')
+    const lines = text.split('\n')
+    for (const [idx, line] of lines.entries()) {
       if (line.trim() === '') continue
-      const parsed = JSON.parse(line) as unknown
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(line) as unknown
+      } catch (err) {
+        if (isTornTail(text, idx, lines.length)) break
+        throw err
+      }
       if (!isQueueEvent(parsed)) {
+        if (isTornTail(text, idx, lines.length)) break
         throw new Error(`invalid daemon inbound queue event at line ${idx + 1}: ${path}`)
       }
       if (parsed.t === 'received') {
@@ -97,9 +106,38 @@ function readRows(path: string): InboundQueueRow[] {
   }
 }
 
+function isTornTail(text: string, idx: number, lineCount: number): boolean {
+  return idx === lineCount - 1 && !text.endsWith('\n')
+}
+
 function appendEvent(path: string, event: QueueEvent): void {
   mkdirSync(dirname(path), { recursive: true })
-  appendFileSync(path, `${JSON.stringify(event)}\n`, { encoding: 'utf8', flag: 'a' })
+  const prefix = repairTailForAppend(path)
+  appendFileSync(path, `${prefix}${JSON.stringify(event)}\n`, { encoding: 'utf8', flag: 'a' })
+}
+
+function repairTailForAppend(path: string): string {
+  let text: string
+  try {
+    text = readFileSync(path, 'utf8')
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException
+    if (e.code === 'ENOENT') return ''
+    throw err
+  }
+  if (text === '' || text.endsWith('\n')) return ''
+
+  const lastNewline = text.lastIndexOf('\n')
+  const tail = lastNewline === -1 ? text : text.slice(lastNewline + 1)
+  try {
+    const parsed = JSON.parse(tail) as unknown
+    if (isQueueEvent(parsed)) return '\n'
+  } catch {
+    // Fall through to truncate the torn tail.
+  }
+
+  truncateSync(path, Buffer.byteLength(lastNewline === -1 ? '' : text.slice(0, lastNewline + 1), 'utf8'))
+  return ''
 }
 
 function isQueueEvent(value: unknown): value is QueueEvent {

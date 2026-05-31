@@ -5,7 +5,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 
 import { startDaemonServer, type DaemonServer } from '../src/daemon-server'
 import { startProxy, type ProxyHandle, type ProxyMcpServer } from '../src/proxy'
-import { CHANNEL_TOOLS, channelNotification, connectProxyOrSpawnDaemon } from '../src/server'
+import { CHANNEL_TOOLS, channelNotification, connectProxyOrSpawnDaemon, stableProxySessionId } from '../src/server'
 import { CHANNEL_OWNER_TOOLS } from '../src/channel-owner'
 
 async function waitFor(pred: () => boolean, ms = 1000): Promise<void> {
@@ -119,5 +119,15 @@ describe('connectProxyOrSpawnDaemon', () => {
     expect(spawnDaemonProcessFn).toHaveBeenCalledTimes(1)
     expect(spawnDaemonProcessFn).toHaveBeenCalledWith('/tmp/feishu-state')
     expect(sleepFn).toHaveBeenCalledWith(100)
+  })
+})
+
+describe('stableProxySessionId', () => {
+  test('is stable across proxy process restarts for the same role and cwd', () => {
+    expect(stableProxySessionId('session', '/tmp/repo-a')).toBe(stableProxySessionId('session', '/tmp/repo-a'))
+  })
+
+  test('distinguishes dispatcher and teammate roles for the same cwd', () => {
+    expect(stableProxySessionId('dispatcher', '/tmp/repo-a')).not.toBe(stableProxySessionId('session', '/tmp/repo-a'))
   })
 })

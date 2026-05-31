@@ -14,6 +14,7 @@
  * core to a real MCP `Server`, a real transport, and graceful shutdown.
  */
 
+import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { dirname } from 'node:path'
@@ -685,7 +686,7 @@ export async function connectProxyOrSpawnDaemon(deps: ConnectProxyDeps): Promise
     try {
       return await startProxyFn({
         socketPath: deps.socketPath,
-        sessionId: sessionId(),
+        sessionId: stableProxySessionId(proxyRole()),
         pid: process.pid,
         proxyVersion: SERVER_VERSION,
         role: proxyRole(),
@@ -726,15 +727,27 @@ function pluginRoot(): string {
   return dirname(dirname(fileURLToPath(import.meta.url)))
 }
 
-function sessionId(): string {
-  return `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
-}
-
 function proxyRole(): 'dispatcher' | 'session' {
   return process.env.FEISHU_CHANNEL_PROXY_ROLE === 'dispatcher' ||
     process.env.FEISHU_CHANNEL_DISPATCHER === '1'
     ? 'dispatcher'
     : 'session'
+}
+
+export function stableProxySessionId(role: 'dispatcher' | 'session', cwd: string = process.cwd()): string {
+  const explicit = process.env.FEISHU_CHANNEL_SESSION_ID
+  if (explicit && /^[A-Za-z0-9._:-]+$/.test(explicit)) return `${role}:${explicit}`
+  const resolved = safeRealpath(cwd)
+  const digest = createHash('sha256').update(`${role}\0${resolved}`).digest('hex').slice(0, 16)
+  return `${role}:${digest}`
+}
+
+function safeRealpath(path: string): string {
+  try {
+    return realpathSync(path)
+  } catch {
+    return path
+  }
 }
 
 function sleep(ms: number): Promise<void> {
