@@ -38,6 +38,9 @@ importers:
 
   plugins/feishu-channel:
     dependencies:
+      '@excitedjs/feishu-transport':
+        specifier: ^0.0.2
+        version: 0.0.2
       '@larksuiteoapi/node-sdk':
         specifier: ^1.64.0
         version: 1.66.0
@@ -445,6 +448,10 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@excitedjs/feishu-transport@0.0.2':
+    resolution: {integrity: sha512-+ruwD4UyiUkI/0T1P2ANA47YdBIQNDAQT3ohMokVmVm/FQXXVwwJHTG7ThM3Sea/c4t8bo9wcmqruXHuHVoLLg==}
+    engines: {node: '>=22.7'}
 
   '@hono/node-server@1.19.14':
     resolution: {integrity: sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw==}
@@ -2097,6 +2104,15 @@ snapshots:
 
   '@esbuild/win32-x64@0.28.0':
     optional: true
+
+  '@excitedjs/feishu-transport@0.0.2':
+    dependencies:
+      '@larksuiteoapi/node-sdk': 1.66.0
+      marked: 15.0.12
+    transitivePeerDependencies:
+      - bufferutil
+      - debug
+      - utf-8-validate
 
   '@hono/node-server@1.19.14(hono@4.12.23)':
     dependencies:

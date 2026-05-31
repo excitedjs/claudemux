@@ -11,13 +11,13 @@
 
 import { gate, isBotSenderType, isGroupAuthorized } from '../access'
 import { loadAccess, saveAccess } from '../access-store'
-import { parseInbound } from '../content'
+import { mentionName, parseInbound } from '@excitedjs/feishu-transport'
 import type { ChannelDelivery, EventHandler, HandlerContext } from '../events'
-import { asString, isRecord } from '../json'
+import { asString, isRecord } from '@excitedjs/feishu-transport'
 import { recordBotIdentity } from '../identity-store'
 import { enqueuePendingNewBot, readChatBots, recordChatMember } from '../chat-bots-store'
 import { buildDiscoveryContext, observeBotSender } from '../bot-discovery'
-import type { Mention } from '../types'
+import type { Mention } from '@excitedjs/feishu-transport'
 
 /** The Feishu event_type this handler subscribes to. */
 export const IM_MESSAGE_EVENT_TYPE = 'im.message.receive_v1'
@@ -80,7 +80,7 @@ export function createImMessageHandler(): EventHandler {
       // an about-to-be-dropped ambient message still contributes to discovery.
       if (isGroup && groupAuthorized && isBotSenderType(event.senderType)) {
         const senderName =
-          event.mentions.find((m) => m.id?.open_id === event.senderId)?.name ?? ''
+          mentionName(event.mentions, event.senderId) ?? ''
         observeBotSender(ctx.baseDir, ctx.transport.appId, event.chatId, {
           botOpenId: ctx.transport.botOpenId,
           senderType: event.senderType,
@@ -97,7 +97,7 @@ export function createImMessageHandler(): EventHandler {
       // self-introduction).
       if (isGroup && groupAuthorized && isBotSenderType(event.senderType) && isIntroduce) {
         const name =
-          event.mentions.find((m) => m.id?.open_id === event.senderId)?.name ?? event.senderId
+          mentionName(event.mentions, event.senderId) ?? event.senderId
         try {
           recordBotIdentity(
             ctx.baseDir,

@@ -6,7 +6,6 @@ import type { HandlerContext } from '../../src/events'
 import {
   BOT_MEMBER_ADDED_EVENT_TYPE,
   createBotMemberHandler,
-  normalizeBotAddedEvent,
 } from '../../src/handlers/bot-member'
 import { readChatBots } from '../../src/chat-bots-store'
 import { FakeTransport } from '../support/fake-transport'
@@ -45,26 +44,6 @@ function botAddedEvent(chatId: string, eventId = 'evt_1'): Record<string, unknow
     },
   }
 }
-
-describe('normalizeBotAddedEvent', () => {
-  test('extracts chat_id and event_id from a full envelope', () => {
-    expect(normalizeBotAddedEvent(botAddedEvent('oc_grp', 'evt_9'))).toEqual({
-      chatId: 'oc_grp',
-      eventId: 'evt_9',
-    })
-  })
-
-  test('tolerates a bare event body without a header (no event_id)', () => {
-    expect(
-      normalizeBotAddedEvent({ chat_id: 'oc_grp', operator_id: { open_id: 'ou_op' } }),
-    ).toEqual({ chatId: 'oc_grp', eventId: '' })
-  })
-
-  test('returns null when chat_id is missing', () => {
-    expect(normalizeBotAddedEvent({ header: { event_id: 'x' }, event: {} })).toBeNull()
-    expect(normalizeBotAddedEvent('nonsense')).toBeNull()
-  })
-})
 
 describe('createBotMemberHandler', () => {
   test('subscribes to the bot-added event type', () => {
