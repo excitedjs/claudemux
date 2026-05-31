@@ -39,7 +39,7 @@ importers:
   plugins/feishu-channel:
     dependencies:
       '@excitedjs/feishu-transport':
-        specifier: ^0.0.2
+        specifier: 0.0.2
         version: 0.0.2
       '@larksuiteoapi/node-sdk':
         specifier: ^1.64.0

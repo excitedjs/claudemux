@@ -11,7 +11,7 @@ import {
   readEnvFile,
   RECEIVED_REACTION_EMOJIS,
 } from '../src/server'
-import type { Access } from '@excitedjs/feishu-transport'
+import type { Access } from '../src/access-types'
 import { BOT_MEMBER_ADDED_EVENT_TYPE } from '../src/handlers/bot-member'
 import {
   commitBaselineInjected,

@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { saveAccess } from '../src/access-store'
 import { IM_MESSAGE_EVENT_TYPE } from '../src/handlers/im-message'
 import { channelNotification, createChannelCore, RECEIVED_REACTION_EMOJIS } from '../src/server'
-import type { Access } from '@excitedjs/feishu-transport'
+import type { Access } from '../src/access-types'
 import { FakeTransport } from './support/fake-transport'
 
 const NOW = 1_700_000_000_000

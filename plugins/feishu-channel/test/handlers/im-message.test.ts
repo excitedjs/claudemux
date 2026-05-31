@@ -10,7 +10,7 @@ import {
   normalizeInboundEvent,
 } from '../../src/handlers/im-message'
 import { commitBaselineInjected, readChatBots, recordChatMember } from '../../src/chat-bots-store'
-import type { Access } from '@excitedjs/feishu-transport'
+import type { Access } from '../../src/access-types'
 import { FakeTransport } from '../support/fake-transport'
 
 const NOW = 1_700_000_000_000

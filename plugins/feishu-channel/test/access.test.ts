@@ -10,7 +10,7 @@ import {
   pruneExpiredPending,
   type GateInput,
 } from '../src/access'
-import type { Access, PendingEntry } from '@excitedjs/feishu-transport'
+import type { Access, PendingEntry } from '../src/access-types'
 
 const NOW = 1_700_000_000_000
 
