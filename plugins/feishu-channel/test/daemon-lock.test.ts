@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'vitest'
-import { existsSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, writeFileSync, utimesSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -89,15 +89,14 @@ describe('daemon-lock acquisition (proper-lockfile)', () => {
     const barrierPath = tmp('barrier')
     const worker = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'daemon-lock-racer.ts')
 
-    const racers = Array.from({ length: 6 }, (_, i) =>
-      runRacer(worker, lockPath, socketPath, barrierPath, 9000 + i),
-    )
+    const racers = Array.from({ length: 6 }, (_, i) => runRacer(worker, lockPath, socketPath, barrierPath, 9000 + i))
+    await waitForReadyRacers(barrierPath, 6)
     writeFileSync(barrierPath, 'go')
     const results = await Promise.all(racers)
 
     expect(results.filter((r) => r.acquired)).toHaveLength(1)
     expect(results.filter((r) => !r.acquired && r.reason === 'held')).toHaveLength(5)
-  }, 10_000)
+  }, 15_000)
 
   test('N independent processes racing a stale lock → exactly one reclaims it', async () => {
     const lockPath = tmp('lock')
@@ -111,12 +110,13 @@ describe('daemon-lock acquisition (proper-lockfile)', () => {
     const racers = Array.from({ length: 6 }, (_, i) =>
       runRacer(worker, lockPath, socketPath, barrierPath, 9100 + i),
     )
+    await waitForReadyRacers(barrierPath, 6)
     writeFileSync(barrierPath, 'go')
     const results = await Promise.all(racers)
 
     expect(results.filter((r) => r.acquired)).toHaveLength(1)
     expect(results.filter((r) => !r.acquired && r.reason === 'held')).toHaveLength(5)
-  }, 10_000)
+  }, 15_000)
 })
 
 describe('probeDaemonSocket (ppid-independent liveness)', () => {
@@ -177,4 +177,20 @@ function runRacer(
       resolve(JSON.parse(line) as { acquired: true } | { acquired: false; reason: 'held' | 'serving' })
     })
   })
+}
+
+async function waitForReadyRacers(barrierPath: string, count: number): Promise<void> {
+  const start = Date.now()
+  while (readyRacerCount(barrierPath) < count) {
+    if (Date.now() - start > 5_000) {
+      throw new Error(`timed out waiting for ${count} daemon-lock racers`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
+function readyRacerCount(barrierPath: string): number {
+  const dir = dirname(barrierPath)
+  const prefix = `${barrierPath.split('/').at(-1)}.`
+  return readdirSync(dir).filter((name) => name.startsWith(prefix) && name.endsWith('.ready')).length
 }
