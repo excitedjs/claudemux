@@ -1,112 +1,121 @@
 /**
  * Single-instance lock for the standing daemon (claudemux#10, slice-1 OS layer).
  *
- * The lock moves off the per-session servers onto the one daemon. Liveness is
- * deliberately NOT based on parent-watching / `process.ppid`: under bun,
- * `process.ppid` isn't refreshed, so the old watchParent orphan check lets a
- * stale lock-holder survive a `/reload-plugins`. Instead the authority is an
- * active probe of the daemon's own socket — a real daemon answers its socket
- * with a `hello`; a dead/hung/recycled holder does not — backed by a cheap
- * `pid`-alive pre-filter. The lock record also carries `startedAt` so release
- * never deletes a *newer* holder's lock.
+ * The lock moves off the per-session servers onto the one daemon. Correctness
+ * rests on three invariants (索西雅's review of the stale-reclaim race):
+ *
+ *   ① Re-probe AFTER acquiring, never act on a pre-acquire probe. `lock()` may
+ *      have *stolen* a lock whose mtime merely lapsed under load while the holder
+ *      is still serving; only a fresh post-acquire socket probe can tell.
+ *   ② Don't hand-roll stale unlink. proper-lockfile owns staleness via the lock
+ *      dir's mtime (kernel-atomic `mkdir` to take it, background `utimes` to keep
+ *      it fresh, `stale` ms to steal it). No "judge-dead → unlink → recreate"
+ *      window for two starters to both pass through.
+ *   ③ The unix-socket bind (daemon-server) is the BACKSTOP arbiter, not the
+ *      primary one: even if two starters somehow both leave `lock()`, only one
+ *      can `listen()` the socket. The lock makes that path cold; the bind makes
+ *      it safe. (Bind also doubles as the slice-2 handoff arbiter.)
+ *
+ * Liveness is deliberately NOT parent-watching / `process.ppid` (unrefreshed
+ * under bun → stale holder survives `/reload-plugins`). The authority is the
+ * socket `hello` probe + proper-lockfile's mtime — both ppid-independent.
  */
 
 import { connect } from 'node:net'
-import { readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+
+import lockfile from 'proper-lockfile'
 
 import { FrameDecoder, type DaemonToProxy } from './ipc'
 
 export interface DaemonLockRecord {
   pid: number
-  /** Epoch millis the holder started — distinguishes a recycled pid on release. */
+  /** Epoch millis the holder started — diagnostics + slice-2 handoff identity. */
   startedAt: number
   socketPath: string
   daemonVersion: string
 }
 
 export interface AcquireDaemonLockDeps {
+  /**
+   * File proper-lockfile guards (it creates `<lockPath>.lock/`). Need not exist;
+   * we pass `realpath: false` so a missing target doesn't reject.
+   */
   lockPath: string
   self: DaemonLockRecord
   /**
-   * Is the current holder genuinely alive? Injected for tests; the default
-   * (`defaultIsHolderAlive`) is a pid pre-filter + a socket `hello` probe.
+   * Re-probe (invariant ①) — true iff a *live* daemon already answers the
+   * socket. Injected for tests; defaults to the `hello` probe on self.socketPath.
    */
-  isHolderAlive?(holder: DaemonLockRecord): Promise<boolean>
-  /** Bound reclaim attempts so two racing daemons can't livelock. */
-  maxAttempts?: number
+  probe?(socketPath: string): Promise<boolean>
+  /**
+   * Staleness threshold (ms) for the lock's mtime. A holder past this without a
+   * refresh is presumed crashed and its lock is stealable. Default 15s.
+   */
+  staleMs?: number
   logInfo?(message: string): void
 }
 
+export interface DaemonLockHandle {
+  /** Release the single-instance lock. Idempotent; safe in a finally/close. */
+  release(): Promise<void>
+}
+
 export type AcquireResult =
-  | { acquired: true }
-  | { acquired: false; holder: DaemonLockRecord }
+  | { acquired: true; handle: DaemonLockHandle }
+  /** `held` — a live daemon holds a fresh lock; `serving` — re-probe (①) found one. */
+  | { acquired: false; reason: 'held' | 'serving' }
 
+/**
+ * Try to become the one daemon. On success the returned handle holds the lock
+ * for the daemon's lifetime (proper-lockfile keeps the mtime fresh in the
+ * background); call `handle.release()` from the daemon's close path.
+ */
 export async function acquireDaemonLock(deps: AcquireDaemonLockDeps): Promise<AcquireResult> {
-  const isHolderAlive = deps.isHolderAlive ?? defaultIsHolderAlive
+  const probe = deps.probe ?? ((p: string) => probeDaemonSocket(p))
   const logInfo = deps.logInfo ?? (() => {})
-  const maxAttempts = deps.maxAttempts ?? 3
 
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    try {
-      writeFileSync(deps.lockPath, JSON.stringify(deps.self), { flag: 'wx' })
-      return { acquired: true }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
-    }
-
-    const holder = readHolder(deps.lockPath)
-    if (holder === null) continue // vanished between create and read — retry
-
-    if (await isHolderAlive(holder)) {
-      return { acquired: false, holder }
-    }
-
-    // Stale holder (dead pid / unresponsive socket / recycled pid) — reclaim.
-    logInfo(`reclaiming stale daemon lock from pid ${holder.pid} (${holder.daemonVersion})`)
-    try {
-      unlinkSync(deps.lockPath)
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
-    }
-  }
-
-  const holder = readHolder(deps.lockPath)
-  return holder ? { acquired: false, holder } : { acquired: false, holder: deps.self }
-}
-
-/** Release the lock only if it still belongs to `self` (don't clobber a newer holder). */
-export function releaseDaemonLock(lockPath: string, self: DaemonLockRecord): void {
-  const holder = readHolder(lockPath)
-  if (holder && holder.pid === self.pid && holder.startedAt === self.startedAt) {
-    try {
-      unlinkSync(lockPath)
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
-    }
-  }
-}
-
-function readHolder(lockPath: string): DaemonLockRecord | null {
+  let release: () => Promise<void>
   try {
-    return JSON.parse(readFileSync(lockPath, 'utf8')) as DaemonLockRecord
-  } catch {
-    return null
-  }
-}
-
-/** pid-alive pre-filter, then the authoritative socket `hello` probe. */
-export async function defaultIsHolderAlive(holder: DaemonLockRecord): Promise<boolean> {
-  if (!pidAlive(holder.pid)) return false
-  return probeDaemonSocket(holder.socketPath)
-}
-
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
+    // Invariant ②: proper-lockfile is the mutex. `lock()` succeeds iff the lock
+    // is free OR stale (mtime older than `stale`), and the steal is atomic — no
+    // unlink/recreate window. A fresh holder makes this throw ELOCKED.
+    release = await lockfile.lock(deps.lockPath, {
+      stale: deps.staleMs ?? 15_000,
+      realpath: false,
+    })
   } catch (err) {
-    // ESRCH = no such process. EPERM = exists but not ours → still alive.
-    return (err as NodeJS.ErrnoException).code === 'EPERM'
+    if ((err as { code?: string }).code === 'ELOCKED') return { acquired: false, reason: 'held' }
+    throw err
+  }
+
+  // Invariant ①: we may have stolen a merely-lapsed lock from a daemon that is
+  // in fact still serving. Probe NOW — never trust a pre-acquire read. If a live
+  // daemon answers, stand down and reuse it; releasing returns the (just-stolen)
+  // lock so the real holder keeps refreshing it.
+  if (await probe(deps.self.socketPath)) {
+    await safeRelease(release)
+    return { acquired: false, reason: 'serving' }
+  }
+
+  logInfo(`acquired daemon lock (pid ${deps.self.pid}, ${deps.self.daemonVersion})`)
+  let released = false
+  return {
+    acquired: true,
+    handle: {
+      release: async () => {
+        if (released) return
+        released = true
+        await safeRelease(release)
+      },
+    },
+  }
+}
+
+async function safeRelease(release: () => Promise<void>): Promise<void> {
+  try {
+    await release()
+  } catch {
+    // Already compromised/released — nothing to clean up.
   }
 }
 

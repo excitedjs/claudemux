@@ -1,7 +1,7 @@
 {
   "name": "claude-channel-feishu",
   "version": "0.3.1",
-  "description": "Feishu (飞书) channel for Claude Code.",
+  "description": "Feishu (\u98de\u4e66) channel for Claude Code.",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -14,10 +14,12 @@
     "@larksuiteoapi/node-sdk": "^1.64.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "marked": "^15.0.12",
+    "proper-lockfile": "^4.1.2",
     "tsx": "^4.19.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/proper-lockfile": "^4.1.4",
     "fast-check": "^3.23.0",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"

@@ -59,16 +59,16 @@ describe('startDaemon (process body)', () => {
     return { r, socketPath, lockPath, transport }
   }
 
-  test('becomes the daemon: opens the transport and writes the lock', async () => {
+  test('becomes the daemon: opens the transport and holds the lock', async () => {
     const { r, lockPath, transport } = await boot()
     expect(r.started).toBe(true)
     expect(transport.start).toHaveBeenCalledTimes(1)
-    expect(existsSync(lockPath)).toBe(true)
+    expect(existsSync(`${lockPath}.lock`)).toBe(true)
   })
 
   test('idempotent startup: a second start finds the live daemon and reuses it', async () => {
     const { socketPath, lockPath } = await boot()
-    // second daemon, same lock + socket, default socket-probe liveness
+    // second daemon, same lock + socket — the held fresh lock makes it stand down
     const second = await startDaemon({
       lockPath,
       socketPath,
@@ -81,7 +81,7 @@ describe('startDaemon (process body)', () => {
     })
     started.push(second)
     expect(second.started).toBe(false)
-    if (!second.started) expect(second.holder.socketPath).toBe(socketPath)
+    if (!second.started) expect(['held', 'serving']).toContain(second.reason)
   })
 
   test('serves a proxy: a reply tool round-trips daemon core -> transport', async () => {

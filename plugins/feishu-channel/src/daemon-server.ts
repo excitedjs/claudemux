@@ -9,9 +9,23 @@
  */
 
 import { createServer, type Server, type Socket } from 'node:net'
+import { unlinkSync } from 'node:fs'
 
 import { createDaemonConnection, type DaemonConnection, type DaemonCore } from './daemon-connection'
+import { probeDaemonSocket } from './daemon-lock'
 import { FrameDecoder, encodeFrame, type ProxyToDaemon } from './ipc'
+
+/**
+ * Thrown when the socket is already bound by a *live* daemon — the atomic
+ * single-instance signal. The caller (startDaemon) treats it as "reuse the
+ * running daemon", not an error to crash on.
+ */
+export class DaemonAlreadyRunningError extends Error {
+  constructor(public readonly socketPath: string) {
+    super(`a daemon is already listening on ${socketPath}`)
+    this.name = 'DaemonAlreadyRunningError'
+  }
+}
 
 export interface DaemonServerDeps {
   /** Absolute path of the unix socket to bind. */
@@ -75,10 +89,14 @@ export function startDaemonServer(deps: DaemonServerDeps): Promise<DaemonServer>
     })
   })
 
+  // The unix-socket bind is the ATOMIC single-instance arbiter: two daemons
+  // racing to listen on the same path — even past the lock — cannot both win,
+  // the second gets EADDRINUSE. On EADDRINUSE we distinguish a live daemon
+  // (reuse) from a stale socket left by a crash (unlink once and rebind).
   return new Promise<DaemonServer>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(deps.socketPath, () => {
-      server.removeListener('error', reject)
+    let triedStaleCleanup = false
+    const onListening = () => {
+      server.removeListener('error', onError)
       resolve({
         connections,
         close: () =>
@@ -87,6 +105,28 @@ export function startDaemonServer(deps: DaemonServerDeps): Promise<DaemonServer>
             server.close(() => res())
           }),
       })
-    })
+    }
+    const onError = (err: NodeJS.ErrnoException) => {
+      if (err.code !== 'EADDRINUSE' || triedStaleCleanup) {
+        reject(err)
+        return
+      }
+      triedStaleCleanup = true
+      probeDaemonSocket(deps.socketPath).then((alive) => {
+        if (alive) {
+          reject(new DaemonAlreadyRunningError(deps.socketPath))
+          return
+        }
+        // Stale socket file (no live listener) — remove it and rebind once.
+        try {
+          unlinkSync(deps.socketPath)
+        } catch (e) {
+          logError('failed to unlink stale daemon socket', e)
+        }
+        server.listen(deps.socketPath, onListening)
+      })
+    }
+    server.on('error', onError)
+    server.listen(deps.socketPath, onListening)
   })
 }
