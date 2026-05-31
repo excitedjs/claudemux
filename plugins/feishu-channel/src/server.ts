@@ -14,7 +14,9 @@
  * core to a real MCP `Server`, a real transport, and graceful shutdown.
  */
 
-import { readFileSync, realpathSync } from 'node:fs'
+import { mkdirSync, readFileSync, realpathSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
@@ -32,11 +34,20 @@ import { getBotIdentity } from './identity-store'
 import { readChatBots } from './chat-bots-store'
 import { asString, isRecord } from '@excitedjs/feishu-transport'
 import { generatePairingCode } from '@excitedjs/feishu-transport'
-import { accessFile, envFile, lockFile, stateDir } from './paths'
+import { startDaemon } from './daemon'
+import type { DaemonLockRecord } from './daemon-lock'
+import { startProxy, type ProxyHandle } from './proxy'
+import { accessFile, daemonLockFile, daemonSocketFile, envFile, lockFile, stateDir } from './paths'
 import { ShutdownCoordinator } from './shutdown'
 
 /** Version advertised to Claude Code in the MCP `initialize` handshake. */
 const SERVER_VERSION = '0.1.0'
+
+/** How long a session proxy waits for a just-spawned daemon to answer. */
+const DAEMON_STARTUP_TIMEOUT_MS = 10_000
+
+/** Retry cadence while waiting for the daemon socket to come up. */
+const DAEMON_CONNECT_RETRY_MS = 100
 
 /** The JSON-RPC method that carries an inbound event to the Claude session. */
 const CHANNEL_NOTIFICATION_METHOD = 'notifications/claude/channel'
@@ -575,52 +586,142 @@ export function readEnvFile(file: string): Record<string, string> {
   return out
 }
 
-/** Process entry point: wire the core to a real MCP server and transport. */
-async function main(): Promise<void> {
+/** Process entry point for the standing daemon: own Feishu + serve proxies. */
+async function runDaemonMain(): Promise<void> {
   const shutdown = new ShutdownCoordinator()
   shutdown.installSignalHandlers()
 
   const base = stateDir()
+  mkdirSync(base, { recursive: true })
   const credentials = loadCredentials(envFile(base))
-  const transport = createFeishuTransport(credentials, lockFile(base))
-  const server = createMcpServer()
+  const socketPath = daemonSocketFile(base)
+  const transport = createFeishuTransport(credentials, lockFile(base), { singleInstance: false })
+  const self: DaemonLockRecord = {
+    pid: process.pid,
+    startedAt: Date.now(),
+    socketPath,
+    daemonVersion: SERVER_VERSION,
+  }
 
-  const core = createChannelCore({
+  const daemon = await startDaemon({
+    lockPath: daemonLockFile(base),
+    socketPath,
+    daemonVersion: SERVER_VERSION,
+    generation: 1,
+    self,
     transport,
     accessFile: accessFile(base),
-    notify: (content, meta) => {
-      // `server.notification` is fire-and-forget; wrap it so a synchronous
-      // throw or an async rejection surfaces on the log instead of vanishing,
-      // and trace each notification by message_id.
-      const messageId = meta.message_id ?? '(no message_id)'
-      defaultLogInfo(`notifying the Claude session of message ${messageId}`)
-      try {
-        server
-          .notification(channelNotification(content, meta))
-          .then(() => defaultLogInfo(`notification delivered for message ${messageId}`))
-          .catch((err) =>
-            defaultLogError(`notification send failed for message ${messageId}`, err),
-          )
-      } catch (err) {
-        defaultLogError(`notification send threw for message ${messageId}`, err)
-      }
-    },
+    baseDir: base,
+    logInfo: defaultLogInfo,
+    logError: defaultLogError,
   })
 
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: core.tools }))
-  server.setRequestHandler(CallToolRequestSchema, (request) =>
-    core.handleTool(request.params.name, request.params.arguments ?? {}),
-  )
+  if (!daemon.started) {
+    defaultLogInfo(`daemon already running (${daemon.reason}); exiting duplicate daemon process`)
+    return
+  }
 
-  shutdown.register('feishu-transport', () => transport.close())
+  shutdown.register('feishu-daemon', () => daemon.close())
+}
+
+/** Process entry point for each Claude session: stdio MCP proxy only. */
+async function runProxyMain(): Promise<void> {
+  const shutdown = new ShutdownCoordinator()
+  shutdown.installSignalHandlers()
+
+  const base = stateDir()
+  mkdirSync(base, { recursive: true })
+  const socketPath = daemonSocketFile(base)
+  const server = createMcpServer()
+  const proxy = await connectProxyOrSpawnDaemon({
+    socketPath,
+    mcpServer: server as unknown as ConnectProxyDeps['mcpServer'],
+    baseDir: base,
+  })
+
+  shutdown.register('feishu-proxy', () => {
+    proxy.close()
+  })
   shutdown.register('mcp-server', () => server.close())
   shutdown.watch(server)
-  // Backstop for a parent that goes away without closing the MCP stdio
-  // connection: a server orphaned to init keeps a Feishu connection slot.
+  // Backstop for a parent that goes away without closing the MCP stdio.
+  // The proxy holds no Feishu connection, but an orphan proxy would keep a
+  // dead session registered with the daemon until the socket eventually closes.
   shutdown.watchParent()
 
   await server.connect(new StdioServerTransport())
-  await transport.start(core.routes)
+}
+
+interface ConnectProxyDeps {
+  socketPath: string
+  mcpServer: Parameters<typeof startProxy>[0]['mcpServer']
+  baseDir: string
+}
+
+async function connectProxyOrSpawnDaemon(deps: ConnectProxyDeps): Promise<ProxyHandle> {
+  const deadline = Date.now() + DAEMON_STARTUP_TIMEOUT_MS
+  let spawned = false
+  let lastError: unknown
+
+  while (Date.now() <= deadline) {
+    try {
+      return await startProxy({
+        socketPath: deps.socketPath,
+        sessionId: sessionId(),
+        pid: process.pid,
+        proxyVersion: SERVER_VERSION,
+        mcpServer: deps.mcpServer,
+        logError: defaultLogError,
+      })
+    } catch (err) {
+      lastError = err
+      if (!spawned) {
+        spawnDaemonProcess(deps.baseDir)
+        spawned = true
+      }
+      await sleep(DAEMON_CONNECT_RETRY_MS)
+    }
+  }
+
+  throw new Error(`failed to connect to Feishu daemon at ${deps.socketPath}: ${String(lastError)}`)
+}
+
+function spawnDaemonProcess(baseDir: string): void {
+  const child = spawn(npmCommand(), ['run', '--silent', 'daemon'], {
+    cwd: pluginRoot(),
+    env: {
+      ...process.env,
+      FEISHU_CHANNEL_STATE_DIR: baseDir,
+    },
+    detached: true,
+    stdio: 'ignore',
+  })
+  child.unref()
+}
+
+function npmCommand(): string {
+  return process.platform === 'win32' ? 'npm.cmd' : 'npm'
+}
+
+function pluginRoot(): string {
+  return dirname(dirname(fileURLToPath(import.meta.url)))
+}
+
+function sessionId(): string {
+  return `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Process entry point: daemon mode or per-session proxy mode. */
+async function main(): Promise<void> {
+  if (process.argv.includes('--daemon') || process.env.FEISHU_CHANNEL_DAEMON === '1') {
+    await runDaemonMain()
+    return
+  }
+  await runProxyMain()
 }
 
 // Run `main` when invoked as the program entry, not when a test imports this

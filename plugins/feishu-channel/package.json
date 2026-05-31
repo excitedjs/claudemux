@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "npm install --silent --no-audit --no-fund >&2 && tsx src/server.ts",
+    "daemon": "tsx src/server.ts --daemon",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

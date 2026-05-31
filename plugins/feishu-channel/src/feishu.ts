@@ -335,6 +335,13 @@ export interface FeishuTransportOptions {
    * built from `creds`. Tests pass a stub; production never sets this.
    */
   client?: lark.Client
+  /**
+   * When true, `start()` performs the legacy per-process single-instance
+   * election before opening the Feishu WebSocket. The standing daemon owns
+   * single-instance coordination itself, so it passes false to open the
+   * transport directly.
+   */
+  singleInstance?: boolean
 }
 
 /**
@@ -351,6 +358,7 @@ export function createFeishuTransport(
   lockPath: string,
   options: FeishuTransportOptions = {},
 ): FeishuTransport {
+  const singleInstance = options.singleInstance ?? true
   const client =
     options.client ??
     new lark.Client({
@@ -431,6 +439,12 @@ export function createFeishuTransport(
     },
 
     async start(routes: InboundRoutes): Promise<void> {
+      if (!singleInstance) {
+        logConnection('opening inbound connection without legacy instance lock')
+        await openInbound(routes)
+        return
+      }
+
       // Exactly one process per machine opens the inbound WebSocket. A freshly
       // started server takes the lock when it is free, and evicts an older
       // channel server still holding it from a previous plugin version — so a

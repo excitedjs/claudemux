@@ -14,8 +14,11 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 /** Root of all channel state: ~/.claude/channels/feishu */
-export function stateDir(home: string = homedir()): string {
-  return join(home, '.claude', 'channels', 'feishu')
+export function stateDir(home?: string): string {
+  if (home === undefined && process.env.FEISHU_CHANNEL_STATE_DIR) {
+    return process.env.FEISHU_CHANNEL_STATE_DIR
+  }
+  return join(home ?? homedir(), '.claude', 'channels', 'feishu')
 }
 
 /** access.json — the access-control policy, managed by the access skill. */
@@ -31,6 +34,16 @@ export function envFile(base: string = stateDir()): string {
 /** connection.lock — the single-instance lock for the inbound WebSocket. */
 export function lockFile(base: string = stateDir()): string {
   return join(base, 'connection.lock')
+}
+
+/** daemon.sock — local IPC socket for the standing Feishu daemon. */
+export function daemonSocketFile(base: string = stateDir()): string {
+  return join(base, 'daemon.sock')
+}
+
+/** daemon.lock — single-instance lock for the standing Feishu daemon. */
+export function daemonLockFile(base: string = stateDir()): string {
+  return join(base, 'daemon.lock')
 }
 
 /**
