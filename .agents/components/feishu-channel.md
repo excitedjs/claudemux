@@ -48,6 +48,31 @@ cleared automatically when Claude replies into that chat. The `message_id →
 reaction_id` map this needs is held in memory in `createChannelCore`, not on
 disk. See [decision feishu-channel-received-reaction-indicator](/.agents/decisions/feishu-channel-received-reaction-indicator.md).
 
+## Daemon/proxy split
+
+Runtime is split into a long-lived daemon and thin MCP stdio proxies. The daemon
+owns the Feishu WebSocket, the durable inbound queue, channel ownership state,
+and outbound tools. Each Claude Code session runs a proxy that keeps its MCP
+stdio transport open, forwards tool calls over the local daemon socket, and
+renders daemon deliveries as `notifications/claude/channel`.
+
+The daemon and proxies advertise the plugin manifest version in their wire
+`hello` / `register` messages. When a newly launched proxy finds an older
+serving daemon, it starts a replacement daemon and waits for the new daemon to
+answer before falling back to the old one. Replacement daemons evict older
+serving daemons through the legacy inbound lock primitive; ordered plugin
+version comparison is the upgrade decision, while process and cwd probes are
+only compatibility safety checks.
+
+After a daemon restart, an already-running proxy keeps the MCP stdio server up
+and reconnects to the daemon socket. In-flight outbound tool calls fail fast and
+are not replayed, because replaying mutating Feishu operations would duplicate
+side effects. Durable inbound delivery still goes through the daemon queue and
+ACK protocol, so unacknowledged inbound events are replayed by the daemon.
+Channel ownership is in daemon memory: after a cutover, the dispatcher becomes
+the default owner when it registers again, and teammates must acquire or be
+granted ownership again.
+
 ## The event registry — the extensibility seam
 
 Event handling is a registry, not a per-event branch in the server. Each

@@ -5,7 +5,12 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { acquireDaemonLock, probeDaemonSocket, type DaemonLockRecord } from '../src/daemon-lock'
+import {
+  acquireDaemonLock,
+  probeDaemonSocket,
+  probeDaemonSocketInfo,
+  type DaemonLockRecord,
+} from '../src/daemon-lock'
 import { startDaemonServer, type DaemonServer } from '../src/daemon-server'
 
 let n = 0
@@ -160,6 +165,11 @@ describe('probeDaemonSocket (ppid-independent liveness)', () => {
       core: { handleTool: async () => ({}) },
     })
     await expect(probeDaemonSocket(socketPath)).resolves.toBe(true)
+    await expect(probeDaemonSocketInfo(socketPath)).resolves.toEqual({
+      daemonVersion: '0.2.1',
+      generation: 1,
+      pid: process.pid,
+    })
   })
 
   test('false when nothing is listening', async () => {

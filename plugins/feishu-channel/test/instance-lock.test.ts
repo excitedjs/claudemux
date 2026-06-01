@@ -6,11 +6,13 @@ import {
   acquireInstanceLock,
   acquireInstanceLockWithEviction,
   defaultLockDeps,
+  EVICT_SIGTERM_GRACE_MS,
   holderIsEvictable,
   releaseInstanceLock,
 } from '../src/instance-lock'
 import type { EvictionDeps, InstanceLockDeps } from '../src/instance-lock'
 import type { ProcessProbe } from '../src/holder-probe'
+import { DEFAULT_FORCE_EXIT_MS } from '../src/shutdown'
 
 /** Deps with a fixed PID and a liveness verdict the test controls. */
 function deps(pid: number, alive: boolean | ((pid: number) => boolean)): InstanceLockDeps {
@@ -129,6 +131,10 @@ describe('holderIsEvictable', () => {
     expect(holderIsEvictable(serverProbe('0.9.0'), self)).toBe(false)
   })
 
+  test('a same-version channel server is evictable when version was decided elsewhere', () => {
+    expect(holderIsEvictable(serverProbe('0.9.0'), self, { requireDifferentSelfDir: false })).toBe(true)
+  })
+
   test('a different-version channel server is evictable', () => {
     expect(holderIsEvictable(serverProbe('0.5.0'), self)).toBe(true)
   })
@@ -157,6 +163,7 @@ describe('acquireInstanceLockWithEviction', () => {
     probe?: (pid: number) => ProcessProbe | undefined
     onSignal?: (pid: number, signal: 'SIGTERM' | 'SIGKILL') => void
     selfDir?: string
+    requireDifferentSelfDir?: boolean
   }): EvictionDeps {
     return {
       pid: opts.pid,
@@ -165,8 +172,13 @@ describe('acquireInstanceLockWithEviction', () => {
       probe: opts.probe ?? (() => undefined),
       signal: opts.onSignal ?? (() => {}),
       sleep: () => Promise.resolve(),
+      requireDifferentSelfDir: opts.requireDifferentSelfDir,
     }
   }
+
+  test('uses at least the daemon shutdown budget before escalating SIGTERM', () => {
+    expect(EVICT_SIGTERM_GRACE_MS).toBeGreaterThanOrEqual(DEFAULT_FORCE_EXIT_MS)
+  })
 
   test('takes a free lock without evicting anything', async () => {
     const signals: string[] = []
@@ -226,6 +238,29 @@ describe('acquireInstanceLockWithEviction', () => {
     expect(result.acquired).toBe(false)
     expect(result.evicted).toBe(false)
     expect(signals).toEqual([])
+  })
+
+  test('evicts a same-directory channel server when the caller already made the version decision', async () => {
+    writeFileSync(lock, '4242\n')
+    let holderAlive = true
+    const signals: string[] = []
+    const result = await acquireInstanceLockWithEviction(
+      lock,
+      evictionDeps({
+        pid: 9999,
+        alive: (p) => (p === 4242 ? holderAlive : false),
+        probe: (p) => (p === 4242 ? serverProbe('0.9.0') : undefined),
+        onSignal: (_p, s) => {
+          signals.push(s)
+          if (s === 'SIGTERM') holderAlive = false
+        },
+        requireDifferentSelfDir: false,
+      }),
+    )
+    expect(result.acquired).toBe(true)
+    expect(result.evicted).toBe(true)
+    expect(signals).toEqual(['SIGTERM'])
+    expect(readFileSync(lock, 'utf8').trim()).toBe('9999')
   })
 
   test('evicts an older channel server that exits on SIGTERM', async () => {

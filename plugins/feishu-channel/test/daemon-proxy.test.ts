@@ -92,6 +92,18 @@ describe('daemon <-> proxy protocol', () => {
     expect(handleTool).toHaveBeenCalledWith('reply', { chat_id: 'oc_x', text: 'hi' })
   })
 
+  test('disconnect rejects in-flight tool calls instead of replaying them', async () => {
+    const { proxyClient } = connect({
+      core: { handleTool: async () => ({}) },
+      deliverToClaude: async () => {},
+    })
+
+    const call = proxyClient.callTool('reply', { text: 'hi' })
+    proxyClient.disconnect(new Error('socket replaced'))
+
+    await expect(call).rejects.toThrow('socket replaced')
+  })
+
   test('handles channel ownership tools in the daemon without forwarding to core', async () => {
     const handleTool = vi.fn(async () => ({ should: 'not run' }))
     const handleOwnershipTool = vi.fn(async () => ({

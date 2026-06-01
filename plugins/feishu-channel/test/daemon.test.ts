@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -7,6 +7,7 @@ import { startDaemon, type StartDaemonResult } from '../src/daemon'
 import { connectToDaemon, type ProxyConnection } from '../src/proxy-transport'
 import type { FeishuTransport } from '../src/feishu'
 import type { DaemonLockRecord } from '../src/daemon-lock'
+import { acquireInstanceLockWithEviction } from '../src/instance-lock'
 
 function fakeTransport(): FeishuTransport {
   return {
@@ -84,6 +85,101 @@ describe('startDaemon (process body)', () => {
     started.push(second)
     expect(second.started).toBe(false)
     if (!second.started) expect(['held', 'serving']).toContain(second.reason)
+  })
+
+  test('evicts an older serving daemon through the legacy inbound lock primitive, then starts', async () => {
+    const legacyLock = tmp('legacy.lock')
+    const acquireLegacyInboundLock = vi.fn(async () => ({ acquired: true as const, evicted: true }))
+    const releaseLegacyInboundLock = vi.fn()
+    let probed = false
+
+    const { r, transport } = await boot({
+      daemonVersion: '0.4.0',
+      legacyInboundLockPath: legacyLock,
+      acquireLegacyInboundLock,
+      releaseLegacyInboundLock,
+      probe: async () => {
+        if (!probed) {
+          probed = true
+          return true
+        }
+        return false
+      },
+      probeDaemonInfo: async () => ({ daemonVersion: '0.3.0', generation: 1 }),
+    })
+
+    expect(r.started).toBe(true)
+    expect(acquireLegacyInboundLock).toHaveBeenCalledWith(legacyLock)
+    expect(releaseLegacyInboundLock).toHaveBeenCalledWith(legacyLock)
+    expect(transport.start).toHaveBeenCalledTimes(1)
+  })
+
+  test('does not evict a same-version serving daemon', async () => {
+    const acquireLegacyInboundLock = vi.fn(async () => ({ acquired: true as const, evicted: true }))
+
+    const { r, transport } = await boot({
+      daemonVersion: '0.4.0',
+      legacyInboundLockPath: tmp('legacy.lock'),
+      acquireLegacyInboundLock,
+      probe: async () => true,
+      probeDaemonInfo: async () => ({ daemonVersion: '0.4.0', generation: 1 }),
+    })
+
+    expect(r).toEqual({ started: false, reason: 'serving' })
+    expect(acquireLegacyInboundLock).not.toHaveBeenCalled()
+    expect(transport.start).not.toHaveBeenCalled()
+  })
+
+  test('after forced legacy eviction, waits out proper-lockfile stale floor and reclaims the daemon lock', async () => {
+    const socketPath = tmp('sock')
+    const lockPath = tmp('lock')
+    const legacyLock = tmp('legacy.lock')
+    mkdirSync(`${lockPath}.lock`)
+    writeFileSync(legacyLock, '4242\n')
+
+    let holderAlive = true
+    const signals: string[] = []
+    const waits: number[] = []
+    const transport = fakeTransport()
+    const r = await startDaemon({
+      lockPath,
+      socketPath,
+      daemonVersion: '0.4.0',
+      generation: 1,
+      self: { ...self(socketPath), daemonVersion: '0.4.0' },
+      transport,
+      accessFile: tmp('access.json'),
+      queueFile: tmp('queue.json'),
+      baseDir: tmpdir(),
+      legacyInboundLockPath: legacyLock,
+      probe: async () => false,
+      probeDaemonInfo: async () => ({ daemonVersion: '0.3.0', generation: 1 }),
+      acquireLegacyInboundLock: (path) => acquireInstanceLockWithEviction(path, {
+        pid: process.pid,
+        isProcessAlive: (pid) => (pid === 4242 ? holderAlive : pid === process.pid),
+        selfDir: '/cache/claudemux/feishu-channel/0.4.0',
+        probe: (pid) => (pid === 4242
+          ? { command: 'tsx src/server.ts', cwd: '/cache/claudemux/feishu-channel/0.4.0' }
+          : undefined),
+        signal: (_pid, signal) => {
+          signals.push(signal)
+          if (signal === 'SIGKILL') holderAlive = false
+        },
+        sleep: async () => {},
+        requireDifferentSelfDir: false,
+      }),
+      sleep: async (ms) => {
+        waits.push(ms)
+        const stale = new Date(Date.now() - 3_000)
+        utimesSync(`${lockPath}.lock`, stale, stale)
+      },
+    })
+    started.push(r)
+
+    expect(r.started).toBe(true)
+    expect(signals).toEqual(['SIGTERM', 'SIGKILL'])
+    expect(waits).toEqual([2_000])
+    expect(transport.start).toHaveBeenCalledTimes(1)
   })
 
   test('serves a proxy: a reply tool round-trips daemon core -> transport', async () => {

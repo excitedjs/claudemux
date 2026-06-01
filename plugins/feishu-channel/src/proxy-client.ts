@@ -40,17 +40,20 @@ export interface ProxyClient {
   register(): void
   /** Forward an MCP tool call to the daemon; resolves with the daemon's result. */
   callTool(name: string, args: Record<string, unknown>): Promise<unknown>
+  /** Reject in-flight calls and mark the client unusable after socket close. */
+  disconnect(reason?: Error): void
   /** Consume one message from the daemon. */
   handle(message: DaemonToProxy): Promise<void>
   /** Daemon identity from `hello`, once received. */
-  readonly daemon: { daemonVersion: string; generation: number } | null
+  readonly daemon: { daemonVersion: string; generation: number; pid?: number } | null
 }
 
 export function createProxyClient(deps: ProxyClientDeps): ProxyClient {
   const logError = deps.logError ?? ((m, e) => console.error(`[proxy] ${m}`, e ?? ''))
   const pending = new Map<number, { resolve(v: unknown): void; reject(e: Error): void }>()
   let nextId = 1
-  let daemon: { daemonVersion: string; generation: number } | null = null
+  let daemon: { daemonVersion: string; generation: number; pid?: number } | null = null
+  let disconnected = false
 
   return {
     get daemon() {
@@ -69,6 +72,7 @@ export function createProxyClient(deps: ProxyClientDeps): ProxyClient {
     },
 
     callTool(name, args) {
+      if (disconnected) return Promise.reject(new Error('Feishu daemon connection is closed'))
       const id = nextId++
       return new Promise<unknown>((resolve, reject) => {
         pending.set(id, { resolve, reject })
@@ -76,10 +80,22 @@ export function createProxyClient(deps: ProxyClientDeps): ProxyClient {
       })
     },
 
+    disconnect(reason = new Error('Feishu daemon connection closed')) {
+      if (disconnected) return
+      disconnected = true
+      for (const [, waiter] of pending) waiter.reject(reason)
+      pending.clear()
+    },
+
     async handle(message) {
+      if (disconnected) return
       switch (message.t) {
         case 'hello':
-          daemon = { daemonVersion: message.daemonVersion, generation: message.generation }
+          daemon = {
+            daemonVersion: message.daemonVersion,
+            generation: message.generation,
+            ...(message.pid !== undefined ? { pid: message.pid } : {}),
+          }
           return
         case 'deliver':
           // Write to Claude first; only ACK once the transport accepted it.

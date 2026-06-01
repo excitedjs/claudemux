@@ -40,7 +40,7 @@ export type ProxyToDaemon =
 /** Daemon -> proxy. */
 export type DaemonToProxy =
   /** Greeting on connect: lets the proxy detect a version/generation it must upgrade past. */
-  | { t: 'hello'; daemonVersion: string; generation: number }
+  | { t: 'hello'; daemonVersion: string; generation: number; pid?: number }
   /** A gated inbound event to push to Claude as a `<channel>` block. */
   | { t: 'deliver'; eventId: string; content: string; meta: Record<string, string> }
   /** Result of a forwarded tool call, keyed by the proxy's `tool.id`. */

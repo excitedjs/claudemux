@@ -14,6 +14,7 @@ import {
   stableProxySessionId,
 } from '../src/server'
 import { CHANNEL_OWNER_TOOLS } from '../src/channel-owner'
+import type { ProxyConnection, ProxyConnectionDeps } from '../src/proxy-transport'
 
 async function waitFor(pred: () => boolean, ms = 1000): Promise<void> {
   const start = Date.now()
@@ -91,13 +92,98 @@ describe('thin proxy MCP wiring', () => {
     await waitFor(() => mcp.notifications.length === 1)
     expect(mcp.notifications[0]).toEqual(channelNotification('# done', { message_id: 'om_9' }))
   })
+
+  test('keeps the MCP surface alive and reconnects after an established daemon closes', async () => {
+    const mcp = fakeMcp()
+    const closeCallbacks: Array<() => void> = []
+    let generation = 0
+    const connectToDaemonFn = vi.fn(async (deps: ProxyConnectionDeps) => {
+      closeCallbacks.push(deps.onClose!)
+      generation += 1
+      return {
+        client: {
+          daemon: { daemonVersion: '0.2.1', generation },
+          callTool: vi.fn(async () => ({ generation })),
+        },
+        close: vi.fn(),
+      } as unknown as ProxyConnection
+    })
+
+    proxy = await startProxy({
+      socketPath,
+      sessionId: 's1',
+      pid: 1,
+      proxyVersion: '0.2.1',
+      role: 'session',
+      mcpServer: mcp.server,
+      connectToDaemonFn,
+      reconnectDelayMs: 1,
+    })
+
+    await expect(
+      mcp.handlers.get(CallToolRequestSchema)!({ params: { name: 'reply', arguments: {} } }),
+    ).resolves.toEqual({ generation: 1 })
+
+    closeCallbacks[0]!()
+    await waitFor(() => {
+      try {
+        return proxy!.connection.client.daemon?.generation === 2
+      } catch {
+        return false
+      }
+    })
+
+    await expect(
+      mcp.handlers.get(CallToolRequestSchema)!({ params: { name: 'reply', arguments: {} } }),
+    ).resolves.toEqual({ generation: 2 })
+  })
+
+  test('mid-session reconnect rejects older daemons without spawning a replacement', async () => {
+    const mcp = fakeMcp()
+    const closeCallbacks: Array<() => void> = []
+    const connectionCloses: Array<ReturnType<typeof vi.fn>> = []
+    const onDaemonMissing = vi.fn()
+    let attempt = 0
+    const connectToDaemonFn = vi.fn(async (deps: ProxyConnectionDeps) => {
+      closeCallbacks.push(deps.onClose!)
+      attempt += 1
+      const close = vi.fn()
+      connectionCloses.push(close)
+      return {
+        client: {
+          daemon: { daemonVersion: attempt === 1 ? '0.2.1' : '0.1.0', generation: attempt },
+          callTool: vi.fn(async () => ({})),
+        },
+        close,
+      } as unknown as ProxyConnection
+    })
+
+    proxy = await startProxy({
+      socketPath,
+      sessionId: 's1',
+      pid: 1,
+      proxyVersion: '0.2.1',
+      role: 'session',
+      mcpServer: mcp.server,
+      connectToDaemonFn,
+      onDaemonMissing,
+      reconnectDelayMs: 1,
+    })
+
+    closeCallbacks[0]!()
+    await waitFor(() => connectToDaemonFn.mock.calls.length >= 2)
+    proxy.close()
+
+    expect(connectionCloses[1]).toHaveBeenCalledTimes(1)
+    expect(onDaemonMissing).not.toHaveBeenCalled()
+  })
 })
 
 describe('connectProxyOrSpawnDaemon', () => {
   test('spawns the daemon once, then retries the proxy connection until it succeeds', async () => {
     const mcp = fakeMcp()
     const handle = {
-      connection: { close: vi.fn(), client: { callTool: vi.fn() } },
+      connection: { close: vi.fn(), client: { callTool: vi.fn(), daemon: { daemonVersion: '0.4.0' } } },
       close: vi.fn(),
     } as unknown as ProxyHandle
     const startProxyFn = vi
@@ -121,11 +207,103 @@ describe('connectProxyOrSpawnDaemon', () => {
     expect(result).toBe(handle)
     expect(startProxyFn).toHaveBeenCalledTimes(2)
     expect(startProxyFn).toHaveBeenLastCalledWith(
-      expect.objectContaining({ socketPath: '/tmp/feishu.sock', role: 'session' }),
+      expect.objectContaining({ socketPath: '/tmp/feishu.sock' }),
     )
     expect(spawnDaemonProcessFn).toHaveBeenCalledTimes(1)
     expect(spawnDaemonProcessFn).toHaveBeenCalledWith('/tmp/feishu-state')
     expect(sleepFn).toHaveBeenCalledWith(100)
+  })
+
+  test('spawns a replacement daemon when the connected daemon is older', async () => {
+    const mcp = fakeMcp()
+    const oldHandle = {
+      connection: { close: vi.fn(), client: { callTool: vi.fn(), daemon: { daemonVersion: '0.1.0' } } },
+      close: vi.fn(),
+    } as unknown as ProxyHandle
+    const newHandle = {
+      connection: { close: vi.fn(), client: { callTool: vi.fn(), daemon: { daemonVersion: '0.4.0' } } },
+      close: vi.fn(),
+    } as unknown as ProxyHandle
+    const startProxyFn = vi.fn().mockResolvedValueOnce(oldHandle).mockResolvedValueOnce(newHandle)
+    const spawnDaemonProcessFn = vi.fn()
+    const sleepFn = vi.fn(async () => {})
+    let tick = 0
+
+    const result = await connectProxyOrSpawnDaemon({
+      socketPath: '/tmp/feishu.sock',
+      mcpServer: mcp.server,
+      baseDir: '/tmp/feishu-state',
+      startProxyFn,
+      spawnDaemonProcessFn,
+      sleepFn,
+      now: () => 1000 + tick++,
+    })
+
+    expect(result).toBe(newHandle)
+    expect(oldHandle.close).toHaveBeenCalledTimes(1)
+    expect(spawnDaemonProcessFn).toHaveBeenCalledTimes(1)
+    expect(startProxyFn).toHaveBeenCalledTimes(2)
+  })
+
+  test('falls back to the old daemon when replacement does not finish before timeout', async () => {
+    const mcp = fakeMcp()
+    const oldHandle = {
+      connection: { close: vi.fn(), client: { callTool: vi.fn(), daemon: { daemonVersion: '0.1.0' } } },
+      close: vi.fn(),
+    } as unknown as ProxyHandle
+    const fallbackHandle = {
+      connection: { close: vi.fn(), client: { callTool: vi.fn(), daemon: { daemonVersion: '0.1.0' } } },
+      close: vi.fn(),
+    } as unknown as ProxyHandle
+    const startProxyFn = vi.fn().mockResolvedValueOnce(oldHandle).mockResolvedValueOnce(fallbackHandle)
+    const spawnDaemonProcessFn = vi.fn()
+    const sleepFn = vi.fn(async () => {})
+    let calls = 0
+
+    const result = await connectProxyOrSpawnDaemon({
+      socketPath: '/tmp/feishu.sock',
+      mcpServer: mcp.server,
+      baseDir: '/tmp/feishu-state',
+      startProxyFn,
+      spawnDaemonProcessFn,
+      sleepFn,
+      now: () => (calls++ < 2 ? 1000 : 20_000),
+    })
+
+    expect(result).toBe(fallbackHandle)
+    expect(spawnDaemonProcessFn).toHaveBeenCalledTimes(1)
+  })
+
+  test('closes a proxy handle if it disconnects before startup version inspection', async () => {
+    const mcp = fakeMcp()
+    const orphanClose = vi.fn()
+    const orphanHandle = {
+      get connection() {
+        throw new Error('connection dropped')
+      },
+      close: orphanClose,
+    } as unknown as ProxyHandle
+    const goodHandle = {
+      connection: { close: vi.fn(), client: { callTool: vi.fn(), daemon: { daemonVersion: '0.4.0' } } },
+      close: vi.fn(),
+    } as unknown as ProxyHandle
+    const startProxyFn = vi.fn().mockResolvedValueOnce(orphanHandle).mockResolvedValueOnce(goodHandle)
+    const spawnDaemonProcessFn = vi.fn()
+    const sleepFn = vi.fn(async () => {})
+    let tick = 0
+
+    const result = await connectProxyOrSpawnDaemon({
+      socketPath: '/tmp/feishu.sock',
+      mcpServer: mcp.server,
+      baseDir: '/tmp/feishu-state',
+      startProxyFn,
+      spawnDaemonProcessFn,
+      sleepFn,
+      now: () => 1000 + tick++,
+    })
+
+    expect(result).toBe(goodHandle)
+    expect(orphanClose).toHaveBeenCalledTimes(1)
   })
 })
 

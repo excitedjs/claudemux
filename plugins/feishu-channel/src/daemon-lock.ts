@@ -27,6 +27,12 @@ import lockfile from 'proper-lockfile'
 
 import { FrameDecoder, type DaemonToProxy } from './ipc'
 
+export interface DaemonSocketInfo {
+  daemonVersion: string
+  generation: number
+  pid?: number
+}
+
 export interface DaemonLockRecord {
   pid: number
   /** Epoch millis the holder started — diagnostics + slice-2 handoff identity. */
@@ -135,26 +141,43 @@ async function safeRelease(release: () => Promise<void>): Promise<void> {
  * speaks this protocol on this socket.
  */
 export function probeDaemonSocket(socketPath: string, timeoutMs = 500): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
+  return probeDaemonSocketInfo(socketPath, timeoutMs).then((info) => info !== null)
+}
+
+/**
+ * Connect to the daemon socket and return its `hello` payload, or `null` when
+ * no compatible daemon answers before `timeoutMs`.
+ */
+export function probeDaemonSocketInfo(
+  socketPath: string,
+  timeoutMs = 500,
+): Promise<DaemonSocketInfo | null> {
+  return new Promise<DaemonSocketInfo | null>((resolve) => {
     const decoder = new FrameDecoder<DaemonToProxy>()
     let settled = false
-    const done = (alive: boolean) => {
+    const done = (info: DaemonSocketInfo | null) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       socket.destroy()
-      resolve(alive)
+      resolve(info)
     }
-    const timer = setTimeout(() => done(false), timeoutMs)
+    const timer = setTimeout(() => done(null), timeoutMs)
     const socket = connect(socketPath)
-    socket.on('error', () => done(false))
+    socket.on('error', () => done(null))
     socket.on('data', (chunk: Buffer) => {
       try {
         for (const m of decoder.push(chunk)) {
-          if (m.t === 'hello') return done(true)
+          if (m.t === 'hello') {
+            return done({
+              daemonVersion: m.daemonVersion,
+              generation: m.generation,
+              ...(m.pid !== undefined ? { pid: m.pid } : {}),
+            })
+          }
         }
       } catch {
-        done(false)
+        done(null)
       }
     })
   })

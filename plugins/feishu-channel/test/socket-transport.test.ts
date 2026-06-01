@@ -55,7 +55,7 @@ describe('daemon/proxy over a real unix socket', () => {
 
     // hello + register flowed over the socket
     await waitFor(() => proxy!.client.daemon !== null)
-    expect(proxy!.client.daemon).toEqual({ daemonVersion: '0.2.1', generation: 2 })
+    expect(proxy!.client.daemon).toEqual({ daemonVersion: '0.2.1', generation: 2, pid: process.pid })
     await waitFor(() => server!.connections.size === 1)
     const conn = [...server!.connections][0]!
     await waitFor(() => conn.session !== null)

@@ -19,6 +19,8 @@ export interface DaemonCore {
 export interface DaemonConnectionDeps {
   /** Daemon's own version, advertised in the `hello` greeting. */
   daemonVersion: string
+  /** Daemon process id, advertised for diagnostics and future direct handoff paths. */
+  daemonPid?: number
   /** Current active generation, advertised in `hello` (see #10 handoff spec). */
   generation: number
   /** Runs a forwarded MCP tool call. */
@@ -66,7 +68,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   let session: RegisteredSession | null = null
 
   // Greet immediately so a newer proxy can detect a daemon it must upgrade past.
-  deps.send({ t: 'hello', daemonVersion: deps.daemonVersion, generation: deps.generation })
+  deps.send({
+    t: 'hello',
+    daemonVersion: deps.daemonVersion,
+    generation: deps.generation,
+    ...(deps.daemonPid !== undefined ? { pid: deps.daemonPid } : {}),
+  })
 
   const conn: DaemonConnection = {
     get session() {

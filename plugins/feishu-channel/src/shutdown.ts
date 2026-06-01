@@ -51,7 +51,7 @@ export interface OrphanWatchDeps {
 const SHUTDOWN_SIGNALS: readonly string[] = ['SIGTERM', 'SIGINT']
 
 /** Default cap on how long graceful cleanup may run before a forced exit. */
-const DEFAULT_FORCE_EXIT_MS = 10_000
+export const DEFAULT_FORCE_EXIT_MS = 10_000
 
 function defaultLogError(message: string, err?: unknown): void {
   if (err === undefined) console.error(message)

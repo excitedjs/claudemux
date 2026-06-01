@@ -22,6 +22,8 @@ export interface ProxyConnectionDeps {
   metadata?: Record<string, string>
   /** Writes a delivered event to Claude (the MCP notification); resolves on write. */
   deliverToClaude(content: string, meta: Record<string, string>): Promise<void>
+  /** Called when an established socket closes. */
+  onClose?(): void
   logError?(message: string, err?: unknown): void
 }
 
@@ -37,6 +39,8 @@ export function connectToDaemon(deps: ProxyConnectionDeps): Promise<ProxyConnect
 
   return new Promise<ProxyConnection>((resolve, reject) => {
     const socket: Socket = connect(deps.socketPath)
+    let settled = false
+    let closed = false
 
     const client = createProxyClient({
       sessionId: deps.sessionId,
@@ -60,18 +64,37 @@ export function connectToDaemon(deps: ProxyConnectionDeps): Promise<ProxyConnect
         socket.destroy()
         return
       }
-      for (const m of messages) void client.handle(m).catch((err) => logError('handle failed', err))
+      for (const m of messages) {
+        void client.handle(m).catch((err) => logError('handle failed', err))
+        if (!settled && m.t === 'hello') {
+          settled = true
+          resolve({
+            client,
+            close: () => socket.destroy(),
+          })
+        }
+      }
     })
     socket.on('error', (err) => {
       logError('socket error', err)
-      reject(err)
+      if (!settled) {
+        settled = true
+        reject(err)
+      }
+    })
+    socket.on('close', () => {
+      if (closed) return
+      closed = true
+      client.disconnect(new Error('Feishu daemon socket closed'))
+      if (!settled) {
+        settled = true
+        reject(new Error('Feishu daemon socket closed before hello'))
+        return
+      }
+      deps.onClose?.()
     })
     socket.once('connect', () => {
       client.register()
-      resolve({
-        client,
-        close: () => socket.destroy(),
-      })
     })
   })
 }

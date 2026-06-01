@@ -33,6 +33,8 @@ export interface DaemonServerDeps {
   socketPath: string
   /** Daemon version, advertised to each proxy in `hello`. */
   daemonVersion: string
+  /** Daemon process id, advertised to proxies in `hello`; defaults to this process. */
+  daemonPid?: number
   /** Current active generation (see #10 handoff spec). */
   generation: number
   /** The shared channel core every connection runs forwarded tool calls against. */
@@ -66,6 +68,7 @@ export function startDaemonServer(deps: DaemonServerDeps): Promise<DaemonServer>
     const decoder = new FrameDecoder<ProxyToDaemon>()
     const conn = createDaemonConnection({
       daemonVersion: deps.daemonVersion,
+      daemonPid: deps.daemonPid ?? process.pid,
       generation: deps.generation,
       core: deps.core,
       onAck: deps.onAck,

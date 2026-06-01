@@ -48,9 +48,15 @@ import {
   stateDir,
 } from './paths'
 import { ShutdownCoordinator } from './shutdown'
+import { comparePluginVersions, readPluginVersion } from './version'
 
-/** Version advertised to Claude Code in the MCP `initialize` handshake. */
-const SERVER_VERSION = '0.1.0'
+let cachedServerVersion: string | undefined
+
+/** Plugin version advertised to Claude Code, daemon proxies, and upgrade handoff. */
+function serverVersion(): string {
+  cachedServerVersion ??= readPluginVersion(pluginRoot())
+  return cachedServerVersion
+}
 
 /** How long a session proxy waits for a just-spawned daemon to answer. */
 const DAEMON_STARTUP_TIMEOUT_MS = 10_000
@@ -550,7 +556,7 @@ const CHANNEL_INSTRUCTIONS = [
 /** Construct the MCP server with the channel capability declared. */
 function createMcpServer(): Server {
   return new Server(
-    { name: 'feishu', version: SERVER_VERSION },
+    { name: 'feishu', version: serverVersion() },
     {
       capabilities: { tools: {}, experimental: { 'claude/channel': {} } },
       instructions: CHANNEL_INSTRUCTIONS,
@@ -609,13 +615,13 @@ async function runDaemonMain(): Promise<void> {
     pid: process.pid,
     startedAt: Date.now(),
     socketPath,
-    daemonVersion: SERVER_VERSION,
+    daemonVersion: serverVersion(),
   }
 
   const daemon = await startDaemon({
     lockPath: daemonLockFile(base),
     socketPath,
-    daemonVersion: SERVER_VERSION,
+    daemonVersion: serverVersion(),
     generation: 1,
     self,
     transport,
@@ -679,22 +685,41 @@ export async function connectProxyOrSpawnDaemon(deps: ConnectProxyDeps): Promise
   const sleepFn = deps.sleepFn ?? sleep
   const now = deps.now ?? Date.now
   const deadline = now() + DAEMON_STARTUP_TIMEOUT_MS
+  const version = serverVersion()
   let spawned = false
+  let sawOlderDaemon = false
   let lastError: unknown
 
   while (now() <= deadline) {
+    let proxy: ProxyHandle | undefined
     try {
-      return await startProxyFn({
+      proxy = await startProxyFn({
         socketPath: deps.socketPath,
         sessionId: stableProxySessionId(proxyRole()),
         pid: process.pid,
-        proxyVersion: SERVER_VERSION,
+        proxyVersion: version,
         role: proxyRole(),
         metadata: deriveProxyMetadata(),
+        onDaemonMissing: () => spawnDaemonProcessFn(deps.baseDir),
         mcpServer: deps.mcpServer,
         logError: defaultLogError,
       })
+      const daemon = proxy.connection.client.daemon
+      if (!daemon || comparePluginVersions(daemon.daemonVersion, version) >= 0) {
+        return proxy
+      }
+      sawOlderDaemon = true
+      lastError = new Error(
+        `connected Feishu daemon ${daemon.daemonVersion} is older than proxy ${version}`,
+      )
+      proxy.close()
+      if (!spawned) {
+        spawnDaemonProcessFn(deps.baseDir)
+        spawned = true
+      }
+      await sleepFn(DAEMON_CONNECT_RETRY_MS)
     } catch (err) {
+      proxy?.close()
       lastError = err
       if (!spawned) {
         spawnDaemonProcessFn(deps.baseDir)
@@ -702,6 +727,20 @@ export async function connectProxyOrSpawnDaemon(deps: ConnectProxyDeps): Promise
       }
       await sleepFn(DAEMON_CONNECT_RETRY_MS)
     }
+  }
+
+  if (sawOlderDaemon) {
+    return await startProxyFn({
+      socketPath: deps.socketPath,
+      sessionId: stableProxySessionId(proxyRole()),
+      pid: process.pid,
+      proxyVersion: version,
+      role: proxyRole(),
+      metadata: deriveProxyMetadata(),
+      onDaemonMissing: () => spawnDaemonProcessFn(deps.baseDir),
+      mcpServer: deps.mcpServer,
+      logError: defaultLogError,
+    })
   }
 
   throw new Error(`failed to connect to Feishu daemon at ${deps.socketPath}: ${String(lastError)}`)

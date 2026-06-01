@@ -13,7 +13,13 @@
  * `createFeishuTransport`.
  */
 
-import { acquireDaemonLock, type AcquireDaemonLockDeps, type DaemonLockRecord } from './daemon-lock'
+import {
+  acquireDaemonLock,
+  probeDaemonSocketInfo,
+  type AcquireDaemonLockDeps,
+  type DaemonLockRecord,
+  type DaemonSocketInfo,
+} from './daemon-lock'
 import { DaemonAlreadyRunningError, startDaemonServer, type DaemonServer } from './daemon-server'
 import { createInboundNotifier, defaultEventId } from './daemon-routing'
 import { openInboundQueue, type InboundQueue } from './daemon-queue'
@@ -21,10 +27,12 @@ import { createChannelCore } from './server'
 import type { FeishuTransport } from './feishu'
 import {
   acquireInstanceLockWithEviction,
+  defaultEvictionDeps,
   releaseInstanceLock,
   type EvictionResult,
 } from './instance-lock'
 import { ChannelOwnerState } from './channel-owner'
+import { comparePluginVersions } from './version'
 
 export interface StartDaemonDeps {
   lockPath: string
@@ -35,6 +43,8 @@ export interface StartDaemonDeps {
   self: DaemonLockRecord
   /** Re-probe (lock invariant ①) for an existing holder; defaults to the socket `hello` probe. */
   probe?: AcquireDaemonLockDeps['probe']
+  /** Read the serving daemon's `hello` identity for version-aware replacement. */
+  probeDaemonInfo?(socketPath: string): Promise<DaemonSocketInfo | null>
   /** Staleness threshold (ms) for the daemon lock; forwarded to proper-lockfile. */
   staleMs?: number
   /** The Feishu platform boundary — a lock-free transport (or a test fake). */
@@ -55,6 +65,7 @@ export interface StartDaemonDeps {
   onAck?(eventId: string): void
   acquireLegacyInboundLock?(path: string): Promise<EvictionResult>
   releaseLegacyInboundLock?(path: string): void
+  sleep?(ms: number): Promise<void>
   now?(): number
   logInfo?(message: string): void
   logError?(message: string, err?: unknown): void
@@ -66,8 +77,10 @@ export type StartDaemonResult =
   /** A live daemon already holds the lock/socket — the caller should reuse it. */
   | { started: false; reason: 'held' | 'serving' }
 
+const POST_EVICTION_DAEMON_LOCK_STALE_MS = 2_000
+
 export async function startDaemon(deps: StartDaemonDeps): Promise<StartDaemonResult> {
-  const lock = await acquireDaemonLock({
+  let lock = await acquireDaemonLock({
     lockPath: deps.lockPath,
     self: deps.self,
     probe: deps.probe,
@@ -75,6 +88,9 @@ export async function startDaemon(deps: StartDaemonDeps): Promise<StartDaemonRes
     logInfo: deps.logInfo,
     logError: deps.logError,
   })
+  if (!lock.acquired && await tryEvictOlderDaemon(deps)) {
+    lock = await acquireDaemonLockAfterEviction(deps)
+  }
   if (!lock.acquired) return { started: false, reason: lock.reason }
 
   const queue = openInboundQueue(deps.queueFile)
@@ -176,6 +192,70 @@ export async function startDaemon(deps: StartDaemonDeps): Promise<StartDaemonRes
       await lock.handle.release()
     },
   }
+}
+
+async function tryEvictOlderDaemon(deps: StartDaemonDeps): Promise<boolean> {
+  if (!deps.legacyInboundLockPath) return false
+  const probeDaemonInfo = deps.probeDaemonInfo ?? probeDaemonSocketInfo
+  const info = await probeDaemonInfo(deps.socketPath)
+  if (!info) return false
+  let isOlder = false
+  try {
+    isOlder = comparePluginVersions(info.daemonVersion, deps.daemonVersion) < 0
+  } catch {
+    return false
+  }
+  if (!isOlder) return false
+
+  const acquireLegacyInboundLock = deps.acquireLegacyInboundLock ?? acquireLegacyInboundLockAfterVersionDecision
+  const legacy = await acquireLegacyInboundLock(deps.legacyInboundLockPath)
+  if (legacy.acquired) {
+    ;(deps.releaseLegacyInboundLock ?? releaseInstanceLock)(deps.legacyInboundLockPath)
+  }
+  if (legacy.evicted) {
+    deps.logInfo?.(
+      `evicted older Feishu daemon ${info.daemonVersion}; retrying daemon startup as ${deps.daemonVersion}`,
+    )
+  }
+  return legacy.evicted
+}
+
+async function acquireDaemonLockAfterEviction(
+  deps: StartDaemonDeps,
+): Promise<Awaited<ReturnType<typeof acquireDaemonLock>>> {
+  const lock = await acquireDaemonLock({
+    lockPath: deps.lockPath,
+    self: deps.self,
+    probe: deps.probe,
+    staleMs: POST_EVICTION_DAEMON_LOCK_STALE_MS,
+    logInfo: deps.logInfo,
+    logError: deps.logError,
+  })
+  if (lock.acquired || lock.reason !== 'held') return lock
+
+  // proper-lockfile clamps stale thresholds to a 2s floor. If the old daemon
+  // was SIGKILLed after confirmed exit, its lock can still be mtime-fresh; wait
+  // out the floor, then rely on the normal post-acquire socket probe.
+  await (deps.sleep ?? sleep)(POST_EVICTION_DAEMON_LOCK_STALE_MS)
+  return acquireDaemonLock({
+    lockPath: deps.lockPath,
+    self: deps.self,
+    probe: deps.probe,
+    staleMs: POST_EVICTION_DAEMON_LOCK_STALE_MS,
+    logInfo: deps.logInfo,
+    logError: deps.logError,
+  })
+}
+
+function acquireLegacyInboundLockAfterVersionDecision(path: string): Promise<EvictionResult> {
+  return acquireInstanceLockWithEviction(path, {
+    ...defaultEvictionDeps(),
+    requireDifferentSelfDir: false,
+  })
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function createDurableNotifier(deps: {

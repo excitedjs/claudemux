@@ -21,6 +21,7 @@ import { dirname } from 'node:path'
 
 import { probeProcess } from './holder-probe'
 import type { ProcessProbe } from './holder-probe'
+import { DEFAULT_FORCE_EXIT_MS } from './shutdown'
 
 /** Injectable environment for the lock — real values in production, fakes in tests. */
 export interface InstanceLockDeps {
@@ -155,6 +156,13 @@ export interface EvictionDeps extends InstanceLockDeps {
   signal: (pid: number, signal: 'SIGTERM' | 'SIGKILL') => void
   /** Resolve after `ms` — the gap between a termination signal and the re-check. */
   sleep: (ms: number) => Promise<void>
+  /**
+   * Require the probed channel server to run from a different version directory
+   * before eviction. The legacy direct-server path uses this as its version
+   * decision; daemon upgrade code already made an ordered manifest-version
+   * decision and uses this probe only as process-shape safety.
+   */
+  requireDifferentSelfDir?: boolean
 }
 
 /** Outcome of `acquireInstanceLockWithEviction`: an `AcquireResult` plus whether a holder was evicted. */
@@ -183,28 +191,30 @@ export function defaultEvictionDeps(): EvictionDeps {
 }
 
 /** Grace period after SIGTERM before escalating to SIGKILL. */
-const EVICT_SIGTERM_GRACE_MS = 5_000
+export const EVICT_SIGTERM_GRACE_MS = DEFAULT_FORCE_EXIT_MS
 /** Grace period after SIGKILL before the wait gives up. */
 const EVICT_SIGKILL_GRACE_MS = 2_000
 /** How often the post-signal wait re-checks whether the holder has exited. */
 const EVICT_POLL_MS = 200
 
 /**
- * Decide whether the lock holder is a channel server this process should
- * evict. It is — and only is — when the holder is positively identified as a
- * feishu-channel `server.ts` process whose version directory differs from
- * this server's own. A probe that could not read the holder, a holder that is
- * not a channel server, and a holder of the *same* version (a legitimate
- * same-build peer) are all left running. Any uncertainty resolves to "do not
- * evict", so an unrelated process can never be killed.
+ * Decide whether the lock holder is a channel server this process may evict.
+ * The process-shape check is always required: a probe that could not read the
+ * holder, or a holder that is not a feishu-channel `server.ts` process, is left
+ * running. Callers that still use the install directory as their version
+ * decision also require a different directory; callers that already made a
+ * stronger version decision may use this as safety-only. Any uncertainty
+ * resolves to "do not evict", so an unrelated process can never be killed.
  */
 export function holderIsEvictable(
   probe: ProcessProbe | undefined,
   selfDir: string,
+  opts: { requireDifferentSelfDir?: boolean } = {},
 ): boolean {
   if (!probe) return false
   const holderDir = channelServerVersionDir(probe)
   if (holderDir === undefined) return false
+  if (opts.requireDifferentSelfDir === false) return true
   return trimSlash(holderDir) !== trimSlash(selfDir)
 }
 
@@ -230,12 +240,12 @@ function trimSlash(path: string): string {
  * holds it.
  *
  * A plain acquire is tried first. When it loses to a live holder, the holder
- * is inspected: if it is a feishu-channel channel server of a *different*
- * version (see `holderIsEvictable`), it is terminated — SIGTERM first so it
+ * is inspected: if it is a feishu-channel channel server that this caller is
+ * allowed to evict (see `holderIsEvictable`), it is terminated — SIGTERM first so it
  * closes its Feishu connection and releases the lockfile itself, escalating
  * to SIGKILL only if it overruns the grace window — and the lock is then
- * reclaimed. A holder that cannot be confirmed as a different-version channel
- * server is left untouched, and this call reports the lock as not acquired,
+ * reclaimed. A holder that cannot be confirmed as an evictable channel server
+ * is left untouched, and this call reports the lock as not acquired,
  * exactly as a plain acquire would.
  *
  * This is the startup path. The standby poll deliberately keeps using the
@@ -255,7 +265,9 @@ export async function acquireInstanceLockWithEviction(
     return { ...first, evicted: false }
   }
 
-  if (!holderIsEvictable(deps.probe(holderPid), deps.selfDir)) {
+  if (!holderIsEvictable(deps.probe(holderPid), deps.selfDir, {
+    requireDifferentSelfDir: deps.requireDifferentSelfDir,
+  })) {
     return { ...first, evicted: false }
   }
 
