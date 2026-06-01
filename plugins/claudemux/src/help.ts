@@ -68,7 +68,7 @@ States: idle, busy, borrowed, killed, orphaned, unknown. With --all, include
 killed teammates; LAST/PREVIEW are '-' for killed rows.
 `,
 
-  spawn: `tm spawn <path> [--name <id>] [--intent "..."] [--engine claude|codex] [--prompt "..."] [--no-worktree] [--remote-control|--no-remote-control] [--timeout N]
+  spawn: `tm spawn <path> [--name <id>] [--intent "..."] [--engine claude|codex] [--prompt "..."] [--no-worktree] [--remote-control|--no-remote-control] [--no-preamble] [--timeout N]
 
 Launch a teammate in <path>. Relative paths resolve against TM_DISPATCHER_DIR.
 Default name is <repo-leaf>-<rand4>; explicit names must match
@@ -81,6 +81,12 @@ Use --no-worktree to run in <path> itself.
 --prompt sends the first turn and prints the reply.
 --engine defaults to claude.
 --remote-control is Claude-only; explicit flag beats CLAUDEMUX_REMOTE_CONTROL.
+
+Prompt preamble (opt-in): if <dispatcherDir>/.tm-preamble.json exists, a
+fresh --prompt spawn prepends the entry for the resolved repo (else the
+"default" entry) to the prompt. Shape: { "default": "...", "repos": {
+"<repo>": "..." } }; keys match the repo path tm records. --no-preamble
+opts a single spawn out.
 
 Exit codes on --prompt: 0 reply printed; 124 wait expired but teammate is
 still running; 1 failure.

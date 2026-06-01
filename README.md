@@ -132,7 +132,7 @@ globally unique.
 |---|---|
 | `tm ls` | List teammates: `NAME REPO WORKTREE ENGINE STATE`. |
 | `tm states` | Fleet snapshot: `NAME REPO WORKTREE ENGINE STATE LAST PREVIEW` — `state` reports `idle` / `busy` / `borrowed` / `unknown`. |
-| `tm spawn <path> [--name <id>] [--intent "…"] [--engine claude\|codex] [--prompt "…"] [--no-worktree] [--remote-control] [--timeout N]` | Launch a teammate in `<path>` (absolute or relative to the dispatcher dir). Default places the teammate inside a git worktree at `<path>/.claude/worktrees/<name>/` (branch `worktree-<name>`, base ref `HEAD`); `--no-worktree` runs in `<path>` itself. `--name <id>` sets the explicit identifier (globally unique); omit it for an auto-generated `<basename(path)>-<rand4>`. `--intent` records a short queryable subject for `tm history`. `--remote-control` / `--no-remote-control` enables/disables Claude Remote Control for just this teammate (overriding the `CLAUDEMUX_REMOTE_CONTROL` config default; Claude-only). With `--prompt`, atomic bootstrap: spawn + send + wait + print the first-turn reply on stdout. |
+| `tm spawn <path> [--name <id>] [--intent "…"] [--engine claude\|codex] [--prompt "…"] [--no-worktree] [--remote-control] [--no-preamble] [--timeout N]` | Launch a teammate in `<path>` (absolute or relative to the dispatcher dir). Default places the teammate inside a git worktree at `<path>/.claude/worktrees/<name>/` (branch `worktree-<name>`, base ref `HEAD`); `--no-worktree` runs in `<path>` itself. `--name <id>` sets the explicit identifier (globally unique); omit it for an auto-generated `<basename(path)>-<rand4>`. `--intent` records a short queryable subject for `tm history`. `--remote-control` / `--no-remote-control` enables/disables Claude Remote Control for just this teammate (overriding the `CLAUDEMUX_REMOTE_CONTROL` config default; Claude-only). When a [prompt preamble](#prompt-preamble) profile is configured, a fresh `--prompt` spawn prepends the matching repo's standing reminder; `--no-preamble` opts that spawn out. With `--prompt`, atomic bootstrap: spawn + send + wait + print the first-turn reply on stdout. |
 | `tm resume <name> [<sid-or-thread-id>] [--prompt "…"] [--engine claude\|codex]` / `tm resume --engine <e> --repo <path> --id <id> [--name <fresh>]` | Resume a prior conversation by teammate name, or resume an orphaned `tm history` row by repo/id. `--id` accepts a full id or an unambiguous prefix. `--prompt` sends a follow-up after relaunch (atomic like `spawn --prompt`). |
 | `tm send <name> --prompt "…" [--pane-quiet] [--timeout N]` | **Atomic round-trip**: send prompt + wait for the Stop hook + print the reply on stdout. The Stop-hook path also echoes the teammate's post-turn ctx to stderr (`ctx: N tokens · …`), eliminating the common "send, then `tm ctx`" follow-up; skipped on `--pane-quiet`. `--prompt` matches the calling form of `tm spawn --prompt` / `tm resume --prompt`; flag order is free. `--pane-quiet` fallback for TUI-only commands (`/help`, `/effort`, permission prompts) that fire no hook. Exit codes: `0` reply landed; `124` sync wait expired and the teammate is still running (re-collect with `tm wait <name>`; do NOT respawn — the name is taken); `1` real failure (no session, sid marker missing, …). |
 | `tm wait <name> [timeout=600] [--fresh] [--pane-quiet] [--timeout N]` | Block until the teammate's next Stop event and print the reply (ctx echo on stderr, same as `tm send`). Use when an external actor (Remote Control, mobile app, cron) drove the turn. `--fresh` waits for the NEXT Stop instead of returning on a stale marker (no-op under `--pane-quiet`). `--timeout N` is equivalent to the positional `[timeout]`. Same exit codes as `tm send`. |
@@ -171,9 +171,33 @@ weekly pass.
 
 ## Configuration
 
-None. The dispatcher directory is wherever you `cd` and run `claude` —
-`tm` derives it from `$PWD` at invocation. Move it by `cd`'ing
-elsewhere; there is no global state file.
+No required configuration. The dispatcher directory is wherever you `cd`
+and run `claude` — `tm` derives it from `$PWD` at invocation. Move it by
+`cd`'ing elsewhere; there is no global state file.
+
+### Prompt preamble
+
+Opt-in. If you keep dispatching teammates into the same repo with the same
+standing first-turn reminder, put it in one file instead of re-pasting it
+into every `--prompt`. Create `.tm-preamble.json` in the dispatcher
+directory:
+
+```json
+{
+  "default": "Standing reminder for any repo without a specific entry.",
+  "repos": {
+    "/abs/path/to/repo-a": "Reminder prepended to spawns into repo-a.",
+    "/abs/path/to/repo-b": "Reminder prepended to spawns into repo-b."
+  }
+}
+```
+
+On a fresh `tm spawn --prompt …`, `tm` looks up the entry for the resolved
+repo path (the path `tm ls` shows for the teammate), falling back to
+`default`, and prepends it to the prompt. Keys are matched after resolving
+symlinks, so either a symlinked or canonical path works. With no file the
+feature is a no-op; `--no-preamble` opts a single spawn out (even when the
+file is present), and an explicit empty entry opts a single repo out.
 
 ## Using `tm` outside Claude Code
 

@@ -47,6 +47,7 @@ import {
   spawnCwdFor,
   triggersHelp,
 } from './parse'
+import { applyPreamble, resolvePreamble } from './preamble'
 import {
   read as readIdentity,
   readArchived as readArchivedIdentity,
@@ -285,6 +286,21 @@ async function dispatchEngineVerb(
         env.remoteControlTeammates ?? false,
       )
       if ('error' in rc) return rc.error
+      // Per-dispatcher prompt preamble (issue #25). Opt-in via
+      // `<dispatcherDir>/.tm-preamble.json`: prepend the repo's standing
+      // first-turn reminder to `--prompt`. Applied only on a fresh spawn
+      // that carries a prompt — a resume reattaches to an existing session,
+      // and a prompt-less spawn has no hand-off for the reminder to ride.
+      // `--no-preamble` opts a single spawn out (and is honored even if the
+      // profile is malformed, since the resolver is never consulted here).
+      let firstTurnPrompt = parsed.hasPrompt ? parsed.prompt : null
+      if (parsed.hasPrompt && parsed.resumeSid.length === 0 && !parsed.noPreamble) {
+        const resolved = resolvePreamble(env.dispatcherDir, repo)
+        if ('error' in resolved) return resolved.error
+        if (resolved.preamble !== null) {
+          firstTurnPrompt = applyPreamble(resolved.preamble, parsed.prompt)
+        }
+      }
       const worktreeSlug = parsed.noWorktree ? null : name
       const cwd = spawnCwdFor(repo, worktreeSlug)
       const intent = parsed.intent.length > 0 ? parsed.intent : null
@@ -296,7 +312,7 @@ async function dispatchEngineVerb(
           cwd,
           worktreeSlug,
           resumeCheckpoint: parsed.resumeSid.length === 0 ? null : parsed.resumeSid,
-          prompt: parsed.hasPrompt ? parsed.prompt : null,
+          prompt: firstTurnPrompt,
           timeoutMs,
           displayName: intent,
           baseRef: await gitBaseRefNote(repo),

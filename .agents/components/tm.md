@@ -136,6 +136,17 @@ protocol. Each has its own decision record — see
   `ExitPlanMode` (`teammateLaunchFlags` in `spawn.ts`). Each opens a modal
   that holds a turn open waiting for a human; a teammate proposes a plan or
   raises a question by ending its turn with text instead.
+- A per-dispatcher prompt preamble is opt-in via
+  `<dispatcherDir>/.tm-preamble.json` (`cli/preamble.ts` `resolvePreamble`,
+  wired in the `cli/dispatch.ts` spawn case). On a fresh `tm spawn --prompt`,
+  the CLI prepends the entry for the resolved repo path — else the
+  dispatcher-wide `default` — to the operator's prompt before it reaches
+  `SpawnRequest.prompt`, so it applies to whichever engine consumes the
+  prompt. Profile keys are `realpath`-normalised on read so a symlinked key
+  still matches the canonical `repo`. A missing file is a no-op; a malformed
+  file fails the spawn loud (the operator opted in); `--no-preamble` opts a
+  single spawn out and is honored even when the file is malformed. Applied
+  only on a fresh prompt spawn — `--resume` and prompt-less spawns skip it.
 
 ## See also
 

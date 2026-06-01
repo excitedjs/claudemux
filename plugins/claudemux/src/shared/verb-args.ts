@@ -60,6 +60,12 @@ export interface SpawnArgs {
    * (defer to the global `CLAUDEMUX_REMOTE_CONTROL` config, else off).
    */
   remoteControl: boolean | null
+  /**
+   * `true` from `--no-preamble`: opt this spawn out of the per-dispatcher
+   * prompt preamble (`.tm-preamble.json`), even when the profile matches.
+   * Default `false` — apply a configured preamble to `--prompt`.
+   */
+  noPreamble: boolean
 }
 
 /** Parsed arg vector for `tm wait`. */
@@ -281,6 +287,7 @@ export function parseSpawnArgs(rest: readonly string[]): SpawnArgs | { error: Tm
   let engine: EngineFlag | null = null
   let noWorktree = false
   let remoteControl: boolean | null = null
+  let noPreamble = false
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i]!
     if (arg === '--resume') {
@@ -343,11 +350,24 @@ export function parseSpawnArgs(rest: readonly string[]): SpawnArgs | { error: Tm
       remoteControl = true
     } else if (arg === '--no-remote-control') {
       remoteControl = false
+    } else if (arg === '--no-preamble') {
+      noPreamble = true
     } else {
       return { error: die(`unknown flag: ${arg}`) }
     }
   }
-  return { engine, name, intent, resumeSid, prompt, hasPrompt, timeout, noWorktree, remoteControl }
+  return {
+    engine,
+    name,
+    intent,
+    resumeSid,
+    prompt,
+    hasPrompt,
+    timeout,
+    noWorktree,
+    remoteControl,
+    noPreamble,
+  }
 }
 
 /**
