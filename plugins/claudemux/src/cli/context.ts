@@ -38,6 +38,20 @@ export function productionVerbContext(env: NativeEnv): VerbContext {
   }
 }
 
+/**
+ * Whether the global `CLAUDEMUX_REMOTE_CONTROL` config defaults teammates to
+ * Remote Control. A dispatcher sets it once in its `.claude/settings.json`
+ * env block; unlike the user-global `remoteControlAtStartup`, it scopes RC to
+ * `tm spawn` teammates and leaves the dispatcher and unrelated `claude`
+ * sessions off. Truthy values: `1`, `true`, `yes`, `on` (any case); anything
+ * else — including `0`, an empty string, and unset — is off.
+ */
+export function remoteControlTeammatesFromEnv(env: NodeJS.ProcessEnv): boolean {
+  const raw = env['CLAUDEMUX_REMOTE_CONTROL']
+  if (raw === undefined) return false
+  return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase())
+}
+
 /** The production `NativeEnv` — the real backends, resolved once per invocation. */
 export function productionEnv(): NativeEnv {
   const env: NativeEnv = {
@@ -58,6 +72,7 @@ export function productionEnv(): NativeEnv {
     //     `""`.
     dispatcherDir: process.env.TM_DISPATCHER_DIR || process.env.PWD || process.cwd(),
     projectsDir: join(process.env.HOME ?? homedir(), '.claude', 'projects'),
+    remoteControlTeammates: remoteControlTeammatesFromEnv(process.env),
   }
   return { ...env, engines: productionRegistry(env) }
 }

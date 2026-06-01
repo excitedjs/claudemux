@@ -77,6 +77,38 @@ export async function inferSpawnEngine(
 }
 
 /**
+ * Resolve whether a `tm spawn` enables Claude Remote Control, applying the
+ * fixed precedence: an explicit `--remote-control` / `--no-remote-control`
+ * wins; otherwise the global `CLAUDEMUX_REMOTE_CONTROL` config default;
+ * otherwise off.
+ *
+ * Remote Control is a Claude session flag (`claude --remote-control`); a
+ * codex teammate has no equivalent. An *explicit* `--remote-control` on a
+ * codex spawn is therefore rejected (mirroring how `--resume` is rejected
+ * for codex). The config default, by contrast, stays silently inert for
+ * codex — turning the global on must never break a codex spawn.
+ */
+export function resolveRemoteControl(
+  explicit: boolean | null,
+  engine: EngineKind,
+  configDefault: boolean,
+): { remoteControl: boolean } | { error: TmResult } {
+  if (engine !== 'claude') {
+    if (explicit === true) {
+      return {
+        error: die(
+          'tm spawn: --remote-control applies only to claude teammates — it ' +
+            "injects the Claude session's --remote-control flag, which a codex " +
+            'teammate has no equivalent for. Omit it for --engine codex.',
+        ),
+      }
+    }
+    return { remoteControl: false }
+  }
+  return { remoteControl: explicit ?? configDefault }
+}
+
+/**
  * Resolve a CLI `<path>` positional into an absolute repo path. An
  * absolute path is taken as-is; a relative path is resolved against
  * the dispatcher dir. `realpathSync` collapses symlinks so the

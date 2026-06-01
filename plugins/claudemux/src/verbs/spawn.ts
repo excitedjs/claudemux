@@ -31,6 +31,8 @@ export interface SpawnArgs {
   readonly prompt: string | null
   readonly timeoutMs: number | null
   readonly displayName: string | null
+  /** Resolved Remote Control opt-in (Claude-only; see SpawnRequest). */
+  readonly remoteControl: boolean
 }
 
 export async function spawnVerb(args: SpawnArgs, ctx: VerbContext): Promise<TmResult> {
@@ -53,6 +55,7 @@ export async function spawnVerb(args: SpawnArgs, ctx: VerbContext): Promise<TmRe
     prompt: args.prompt,
     timeoutMs: args.timeoutMs,
     displayName: args.displayName,
+    remoteControl: args.remoteControl,
   }
   const result: SpawnResult = await engine.spawn(req, ctx.engineContext)
   if (result.tmResult !== undefined) {

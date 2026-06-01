@@ -67,6 +67,15 @@ ENVIRONMENT
                        the Bash tool's cwd drifts. Falls back to $PWD
                        when unset. \`tm spawn <path>\` resolves a relative
                        <path> against this directory.
+  CLAUDEMUX_REMOTE_CONTROL
+                       When truthy (1/true/yes/on), \`tm spawn\` launches
+                       Claude teammates with Remote Control by default —
+                       the per-teammate alternative to the user-global
+                       remoteControlAtStartup, which would also enable it
+                       for the dispatcher and unrelated claude sessions.
+                       Set it in the dispatcher's .claude/settings.json
+                       env block. A per-spawn --remote-control /
+                       --no-remote-control overrides it.
 `
 
 /** Per-verb help text — `tm <verb> --help` and `tm help <verb>` both print this. */
@@ -100,7 +109,7 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       PREVIEW render as '-' because the live markers are gone. Recover
       one with \`tm resume <name>\`.
 `,
-  spawn: `tm spawn <path> [--name <id>] [--engine claude|codex] [--prompt "..."] [--no-worktree] [--timeout N]
+  spawn: `tm spawn <path> [--name <id>] [--engine claude|codex] [--prompt "..."] [--no-worktree] [--remote-control] [--timeout N]
 
       Launch a teammate in <path>. <path> is positional; it may be
       absolute, or relative to the dispatcher dir
@@ -146,6 +155,18 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       teammates default to a self-managed git worktree at the same
       \`.claude/worktrees/<name>/\` layout; they are not tmux sessions,
       and \`--resume\` / \`--task\` are rejected on that path.
+
+      \`--remote-control\` launches this Claude teammate with Remote
+      Control on, so it gets its own claude.ai/code web + mobile URL
+      (printed in the teammate's startup banner; read it with
+      \`tm status <name>\`). It scopes Remote Control to the teammate
+      and leaves the user-global \`remoteControlAtStartup\` — which
+      would also turn it on for the dispatcher and every unrelated
+      \`claude\` session — untouched. \`--no-remote-control\` forces it
+      off. With neither flag the \`CLAUDEMUX_REMOTE_CONTROL\` config
+      supplies the default (off when unset); precedence is
+      explicit flag > config > off. Claude-only — an explicit
+      \`--remote-control\` is rejected with \`--engine codex\`.
 
       Every teammate launches with the \`AskUserQuestion\`,
       \`EnterPlanMode\`, and \`ExitPlanMode\` tools disabled — a

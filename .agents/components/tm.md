@@ -81,6 +81,16 @@ protocol. Each has its own decision record — see
   and diverge under a symlinked dispatcher tree). `/claudemux:setup` writes
   `TM_DISPATCHER_DIR` into the dispatcher's `.claude/settings.json` so it
   survives Bash-tool cwd drift. `tm doctor` reports the resolved value.
+- Remote Control is a per-teammate `tm spawn` concern, distinct from the
+  user-global `remoteControlAtStartup` (which would also enable it for the
+  dispatcher and every unrelated `claude`). `tm spawn --remote-control` /
+  `--no-remote-control` injects or suppresses `claude --remote-control` for
+  that one teammate through the Claude engine's launch flags;
+  `CLAUDEMUX_REMOTE_CONTROL` (read once per invocation into
+  `NativeEnv.remoteControlTeammates`) is the dispatcher-set default for every
+  spawn. Precedence resolves in `cli/parse.ts` `resolveRemoteControl` — explicit
+  flag > config > off — and an explicit `--remote-control` is rejected for
+  `--engine codex` (RC is a Claude session flag with no codex equivalent).
 - Spawned teammates are launched with `tmux new-session -e
   CLAUDEMUX_TEAMMATE_NAME=<name>`; the SessionStart hook uses that env var
   as an identity gate. A teammate started by raw `tmux` without that `-e`

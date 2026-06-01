@@ -569,6 +569,7 @@ export class ClaudeEngine implements Engine {
     if (req.worktreeSlug !== null) argv.push('--worktree-slug', req.worktreeSlug)
     if (req.resumeCheckpoint !== null) argv.push('--resume', req.resumeCheckpoint)
     if (req.displayName !== null) argv.push('--display-name', req.displayName)
+    if (req.remoteControl) argv.push('--remote-control')
     if (req.prompt !== null) argv.push('--prompt', req.prompt)
     // `--timeout` MUST reach the inner `tm send` on the --prompt sync path —
     // CLI parses it into `SpawnRequest.timeoutMs` for a reason. Without this,

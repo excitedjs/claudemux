@@ -238,6 +238,7 @@ describe.skip('CodexEngine — core lifecycle', () => {
         prompt: null,
         timeoutMs: null,
         displayName: 'engine test',
+        remoteControl: false,
       },
       ctx(),
     )
@@ -312,12 +313,12 @@ describe.skip('CodexEngine — core lifecycle', () => {
     const name = nameUnder()
     spawned.push(name)
     await engine.spawn(
-      { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null },
+      { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null, remoteControl: false },
       ctx(),
     )
 
     const duplicate = await engine.spawn(
-      { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null },
+      { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null, remoteControl: false },
       ctx(),
     )
     expect(duplicate).toEqual({ kind: 'already-exists', existingEngine: 'codex' })
@@ -441,7 +442,7 @@ describe.skip('CodexEngine — core lifecycle', () => {
     const name = nameUnder()
     spawned.push(name)
     await engine.spawn(
-      { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null },
+      { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null, remoteControl: false },
       ctx(),
     )
 
@@ -537,11 +538,11 @@ describe.skip('CodexEngine — core lifecycle', () => {
 
     const [first, second] = await Promise.all([
       engine.spawn(
-        { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null },
+        { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null, remoteControl: false },
         slowCtx,
       ),
       engine.spawn(
-        { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null },
+        { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null, remoteControl: false },
         slowCtx,
       ),
     ])
@@ -646,7 +647,7 @@ describe.skip('CodexEngine — core lifecycle', () => {
     spawned.push(name)
     const nowMs = 1_800_000_000_000
     await engine.spawn(
-      { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null },
+      { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null, remoteControl: false },
       ctx(),
     )
     await engine.send(
@@ -720,7 +721,7 @@ describe.skip('CodexEngine — core lifecycle', () => {
     const nowMs = 1_800_000_000_000
     const threadReadCtx = ctxWithEnv({ ...process.env, CODEX_FAKE_THREAD_READ_STATUS: 'idle' })
     await engine.spawn(
-      { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null },
+      { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null, remoteControl: false },
       threadReadCtx,
     )
     await engine.send(
@@ -757,7 +758,7 @@ describe.skip('CodexEngine — core lifecycle', () => {
       CODEX_FAKE_INITIALIZE_DELAY_MS: '400',
     })
     await engine.spawn(
-      { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null },
+      { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null, remoteControl: false },
       slowInitializeCtx,
     )
     await waitFor(() => connectionCounts(connectionLog).closes >= 1)
@@ -931,7 +932,7 @@ describe.skip('CodexEngine — core lifecycle', () => {
     const name = nameUnder()
     spawned.push(name)
     await engine.spawn(
-      { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null },
+      { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: null, remoteControl: false },
       ctx(),
     )
     const state = readDaemonState(name)
@@ -977,6 +978,7 @@ describe.skip('CodexEngine — core lifecycle', () => {
           prompt: null,
           timeoutMs: null,
           displayName: 'wait backfill',
+          remoteControl: false,
         },
         ctx(),
       )
@@ -1062,7 +1064,7 @@ describe.skip('CodexEngine — core lifecycle', () => {
     const localEngine = new CodexEngine({ binPath: FAKE_CODEX, readyTimeoutMs: 5000 })
     try {
       await localEngine.spawn(
-        { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: `wait backfill ${turnStatus}` },
+        { name, repo: cwd, cwd, worktreeSlug: null, resumeCheckpoint: null, prompt: null, timeoutMs: null, displayName: `wait backfill ${turnStatus}`, remoteControl: false },
         ctx(),
       )
       const send = await localEngine.send(

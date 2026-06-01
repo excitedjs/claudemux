@@ -68,7 +68,8 @@ Read stderr before deciding the next step; timeout paths name the recovery verb 
 
 ## Dispatcher-facing details on Claude spawn
 
-- **Remote Control URL.** The teammate's startup banner prints its Remote Control URL; read it from `tm status <name>` and record it in the ledger at spawn time so the user has a direct channel to that teammate.
+- **Remote Control opt-in.** Remote Control (claude.ai/code web + mobile) is per-teammate and off by default. Enable it for a spawn with `tm spawn <repo> --remote-control` when the user asks for it in natural language — "用 RC 模式派一个 xxx 任务", "这个功能开发要 remote-control 模式", "I want to drive this one from my phone". `--no-remote-control` forces it off. To default every teammate to RC, set `CLAUDEMUX_REMOTE_CONTROL=1` in the dispatcher's `.claude/settings.json` env block; a per-spawn flag still overrides it (precedence: explicit flag > config > off). This is the per-teammate alternative to the user-global `remoteControlAtStartup`, which would also turn RC on for the dispatcher and every unrelated `claude` session. RC is Claude-only; an explicit `--remote-control` is rejected with `--engine codex`.
+- **Remote Control URL.** When RC is enabled, the teammate's startup banner prints its Remote Control URL; read it from `tm status <name>` and record it in the ledger at spawn time so the user has a direct channel to that teammate.
 
 ## Persistent Codex daemon teammates
 

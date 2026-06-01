@@ -87,6 +87,8 @@ interface ClaudeLaunchArgs {
    * never fires inside the window it was scheduled against.
    */
   readonly timeout: string | null
+  /** Launch `claude` with `--remote-control` for this teammate. */
+  readonly remoteControl: boolean
 }
 
 /**
@@ -110,9 +112,16 @@ function shellSingleQuote(value: string): string {
  * that holds the turn open waiting for a human, and a teammate has no
  * human at its terminal. A teammate proposes a plan by ending its turn
  * with text, which `tm send` relays to the dispatcher.
+ *
+ * `remoteControl` appends `--remote-control`, scoping Claude's Remote
+ * Control (claude.ai/code web + mobile) to this one teammate without the
+ * user-global `remoteControlAtStartup`. The flag's optional `[name]`
+ * argument is left off; the following token is always another flag
+ * (`-n`), so Claude's parser never mistakes one for the RC session name.
  */
-function teammateLaunchFlags(mdExcludes: string): string {
-  return `--settings ${shellSingleQuote(mdExcludes)} --disallowedTools AskUserQuestion,EnterPlanMode,ExitPlanMode`
+function teammateLaunchFlags(mdExcludes: string, remoteControl: boolean): string {
+  const base = `--settings ${shellSingleQuote(mdExcludes)} --disallowedTools AskUserQuestion,EnterPlanMode,ExitPlanMode`
+  return remoteControl ? `${base} --remote-control` : base
 }
 
 /**
@@ -185,6 +194,7 @@ export async function claudeSpawn(
     prompt: launch.prompt,
     hasPrompt: launch.hasPrompt,
     timeout: launch.timeout,
+    remoteControl: launch.remoteControl,
   }, env, name)
 }
 
@@ -210,6 +220,7 @@ export async function claudeContinue(
     prompt: launch.prompt,
     hasPrompt: launch.hasPrompt,
     timeout: launch.timeout,
+    remoteControl: launch.remoteControl,
   }, env, name)
 }
 
@@ -222,6 +233,7 @@ interface ParsedClaudeLaunch {
   prompt: string
   hasPrompt: boolean
   timeout: string | null
+  remoteControl: boolean
 }
 
 /**
@@ -244,6 +256,7 @@ function parseClaudeLaunchArgs(
   let prompt = ''
   let hasPrompt = false
   let timeout: string | null = null
+  let remoteControl = false
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!
     const consumeValue = (): string | null => {
@@ -281,13 +294,15 @@ function parseClaudeLaunchArgs(
       const v = consumeValue()
       if (v === null) return { error: die('claude spawn: --timeout requires a value') }
       timeout = v
+    } else if (arg === '--remote-control') {
+      remoteControl = true
     } else {
       return { error: die(`claude spawn: unknown flag: ${arg}`) }
     }
   }
   if (repo.length === 0) return { error: die('claude spawn: missing --repo') }
   if (cwd.length === 0) cwd = repo
-  return { repo, cwd, worktreeSlug, resumeSid, displayName, prompt, hasPrompt, timeout }
+  return { repo, cwd, worktreeSlug, resumeSid, displayName, prompt, hasPrompt, timeout, remoteControl }
 }
 
 async function claudeLaunch(
@@ -295,7 +310,7 @@ async function claudeLaunch(
   env: ClaudeVerbEnv,
   name: string,
 ): Promise<TmResult> {
-  const { repo, cwd, worktreeSlug, resumeSid, continueLatest, displayName, prompt, hasPrompt, timeout } = req
+  const { repo, cwd, worktreeSlug, resumeSid, continueLatest, displayName, prompt, hasPrompt, timeout, remoteControl } = req
   if (!isDirectory(repo)) return dieRepoNotFound('spawn', name, repo, env.dispatcherDir)
 
   // The tmux pane is anchored at the repo root. When a worktree is
@@ -377,7 +392,7 @@ async function claudeLaunch(
   if (paneId.length === 0) return die(`tmux new-session returned no session id for ${name}`)
 
   const sid = resumeSid.length > 0 ? resumeSid : continueLatest ? '' : newSid()
-  const launchFlags = teammateLaunchFlags(mdExcludes)
+  const launchFlags = teammateLaunchFlags(mdExcludes, remoteControl)
   const nameArg =
     displayName.length > 0 ? ` -n ${shellSingleQuote(displayName)}` : ` -n ${shellSingleQuote(name)}`
   const worktreeArg = worktreeSlug !== null ? ` --worktree ${shellSingleQuote(worktreeSlug)}` : ''

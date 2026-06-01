@@ -41,6 +41,8 @@ export async function codexSpawn(
       prompt: opts.prompt ?? null,
       timeoutMs: timeoutMsFromSeconds(opts.timeoutSec ?? null),
       displayName: opts.displayName ?? null,
+      // Remote Control is a Claude session flag; codex teammates never get it.
+      remoteControl: false,
     },
     engineContext(),
   )

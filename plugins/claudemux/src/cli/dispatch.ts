@@ -41,6 +41,7 @@ import {
   parseCtxArgs,
   parseReloadTargets,
   parseTimeoutMs,
+  resolveRemoteControl,
   resolveRepoPath,
   resumeCwdProbeable,
   spawnCwdFor,
@@ -185,6 +186,12 @@ async function dispatchEngineVerb(
         const invalidName = codexNameFailure(name)
         if (invalidName !== null) return die(invalidName)
       }
+      const rc = resolveRemoteControl(
+        parsed.remoteControl,
+        engine,
+        env.remoteControlTeammates ?? false,
+      )
+      if ('error' in rc) return rc.error
       const worktreeSlug = parsed.noWorktree ? null : name
       const cwd = spawnCwdFor(repo, worktreeSlug)
       return spawnVerb(
@@ -198,6 +205,7 @@ async function dispatchEngineVerb(
           prompt: parsed.hasPrompt ? parsed.prompt : null,
           timeoutMs,
           displayName: null,
+          remoteControl: rc.remoteControl,
         },
         ctx,
       )

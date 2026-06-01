@@ -24,6 +24,12 @@ export interface NativeEnv {
   readonly dispatcherDir: string
   /** The `~/.claude/projects` directory that holds Claude Code transcripts. */
   readonly projectsDir: string
+  /**
+   * Global `CLAUDEMUX_REMOTE_CONTROL` default — when set, `tm spawn`
+   * launches Claude teammates with Remote Control unless an explicit
+   * `--no-remote-control` overrides it. Optional; absent is treated as off.
+   */
+  readonly remoteControlTeammates?: boolean
   /** Production Engine registry; optional for legacy tests. */
   readonly engines?: EngineRegistryView
 }

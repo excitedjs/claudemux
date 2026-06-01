@@ -105,6 +105,14 @@ export interface SpawnRequest {
   readonly timeoutMs: number | null
   /** Human-readable display name for fleet listing; null falls back to `name`. */
   readonly displayName: string | null
+  /**
+   * Launch this teammate with Remote Control enabled. Claude-only: the
+   * Claude engine injects `claude --remote-control`; engines without an RC
+   * equivalent (codex) ignore it. The CLI resolves the precedence
+   * (explicit flag > `CLAUDEMUX_REMOTE_CONTROL` config > off) into this
+   * boolean before the request is built.
+   */
+  readonly remoteControl: boolean
 }
 
 /**

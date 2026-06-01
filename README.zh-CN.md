@@ -42,8 +42,16 @@ flowchart TB
 - 咖啡馆笔记本上接着派新活,dispatcher 同时继续协调其他 teammate
 - 三台设备三个窗口,并行驱动同一支 fleet
 
-`/claudemux:setup` 会帮你打开 Claude Code 的 `remoteControlAtStartup`,
-之后每个 teammate 一起来就注册好自己的 URL。
+Remote Control 想开多大范围都行:
+
+- **按 teammate(限定)**。`tm spawn <path> --remote-control` 只给这一个
+  teammate 开;`--no-remote-control` 强制关。在 dispatcher 的
+  `.claude/settings.json` env 块里设 `CLAUDEMUX_REMOTE_CONTROL=1`,就让每次
+  `tm spawn` 默认带 RC。这样 dispatcher 自己和其它无关的 `claude` 会话都不开
+  RC——单次 flag 永远盖过 config(优先级:显式 flag > config > 关)。
+- **全局**。`/claudemux:setup` 可以帮你打开 Claude Code 用户级的
+  `remoteControlAtStartup`,之后每个 `claude` 会话——dispatcher 和 teammate
+  都算——一起来就注册好自己的 URL。
 
 ## 安装
 
@@ -107,7 +115,7 @@ name 必须 match `^[A-Za-z0-9][A-Za-z0-9_-]*$`,且全局唯一。
 |---|---|
 | `tm ls` | 列出 teammate:`NAME REPO WORKTREE ENGINE STATE`。 |
 | `tm states` | 整体快照:`NAME REPO WORKTREE ENGINE STATE LAST PREVIEW`,`state` 是 `idle` / `busy` / `unknown`。 |
-| `tm spawn <path> [--name <id>] [--engine claude\|codex] [--prompt "…"] [--no-worktree] [--timeout N]` | 在 `<path>` 起 teammate(绝对路径,或者相对 dispatcher 根目录)。默认把 teammate 放进 `<path>/.claude/worktrees/<name>/` 这个 worktree(分支 `worktree-<name>`,base ref `HEAD`);`--no-worktree` 直接跑在 `<path>` 本身。`--name <id>` 显式给名字(全局唯一);不传就是 `<basename(path)>-<rand4>`。带 `--prompt` 即原子 bootstrap:spawn + send + 等 Stop + 把首轮回话打到 stdout。 |
+| `tm spawn <path> [--name <id>] [--engine claude\|codex] [--prompt "…"] [--no-worktree] [--remote-control] [--timeout N]` | 在 `<path>` 起 teammate(绝对路径,或者相对 dispatcher 根目录)。默认把 teammate 放进 `<path>/.claude/worktrees/<name>/` 这个 worktree(分支 `worktree-<name>`,base ref `HEAD`);`--no-worktree` 直接跑在 `<path>` 本身。`--name <id>` 显式给名字(全局唯一);不传就是 `<basename(path)>-<rand4>`。`--remote-control` / `--no-remote-control` 只给这一个 teammate 开/关 Claude Remote Control(盖过 `CLAUDEMUX_REMOTE_CONTROL` config 默认;仅 Claude)。带 `--prompt` 即原子 bootstrap:spawn + send + 等 Stop + 把首轮回话打到 stdout。 |
 | `tm resume <name> [<sid-or-thread-id>] [--prompt "…"] [--engine claude\|codex]` | 按 teammate 名字恢复旧会话。Claude 用 transcript `sid`,不传可按 mtime 选最新 jsonl。Codex 必须显式传 `/tmp/teammate-codex/<name>/thread` 或 rollout 文件名里的 thread id,会重新起 app-server daemon 并调用 `thread/resume`。`--prompt` 在重连后派 prompt(行为同 `spawn --prompt`)。 |
 | `tm send <name> --prompt "…" [--pane-quiet] [--timeout N]` | **原子 round-trip**:发 prompt + 等 Stop + 把回话打到 stdout。Stop-hook 路径还把当前 ctx 顺手打到 stderr(`ctx: N tokens · …`),消灭 send 完再单独 `tm ctx` 的高频模式;`--pane-quiet` 不打。`--prompt` 和 `tm spawn --prompt` / `tm resume --prompt` 一套写法;flag / `<name>` 顺序自由。`--pane-quiet` 给 TUI-only(`/help` / `/effort` / 权限弹窗)兜底,这些路径不触发 hook。退码:`0` 拿到回话;`124` sync wait 超时,但 teammate 还在跑(用 `tm wait <name>` 续等;别重新 spawn,name 还占着);`1` 真失败(没 session / sid marker 缺失等)。 |
 | `tm wait <name> [timeout=600] [--fresh] [--pane-quiet] [--timeout N]` | 阻塞到 teammate 下一次 Stop,打回话到 stdout(ctx 走 stderr,行为同 `tm send`)。外部驱动(Remote Control / 移动端 / cron)推动的 turn 用这个收。`--fresh` 等下一次 Stop 而不是被已有 marker 立即满足(`--pane-quiet` 模式下 `--fresh` 不生效)。`--timeout N` 等价位置参数 `[timeout]`。退码同 `tm send`。 |

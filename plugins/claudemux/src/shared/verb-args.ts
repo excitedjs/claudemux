@@ -49,6 +49,12 @@ export interface SpawnArgs {
   hasPrompt: boolean
   timeout: string | null
   noWorktree: boolean
+  /**
+   * Tri-state Remote Control opt-in: `true` from `--remote-control`,
+   * `false` from `--no-remote-control`, `null` when neither was passed
+   * (defer to the global `CLAUDEMUX_REMOTE_CONTROL` config, else off).
+   */
+  remoteControl: boolean | null
 }
 
 /** Parsed arg vector for `tm wait`. */
@@ -233,6 +239,7 @@ export function parseSpawnArgs(rest: readonly string[]): SpawnArgs | { error: Tm
   let timeout: string | null = null
   let engine: EngineFlag | null = null
   let noWorktree = false
+  let remoteControl: boolean | null = null
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i]!
     if (arg === '--resume') {
@@ -283,11 +290,15 @@ export function parseSpawnArgs(rest: readonly string[]): SpawnArgs | { error: Tm
       hasPrompt = true
     } else if (arg === '--no-worktree') {
       noWorktree = true
+    } else if (arg === '--remote-control') {
+      remoteControl = true
+    } else if (arg === '--no-remote-control') {
+      remoteControl = false
     } else {
       return { error: die(`unknown flag: ${arg}`) }
     }
   }
-  return { engine, name, resumeSid, prompt, hasPrompt, timeout, noWorktree }
+  return { engine, name, resumeSid, prompt, hasPrompt, timeout, noWorktree, remoteControl }
 }
 
 /**
