@@ -673,6 +673,7 @@ interface ConnectProxyDeps {
   socketPath: string
   mcpServer: Parameters<typeof startProxy>[0]['mcpServer']
   baseDir: string
+  serverVersionFn?: typeof serverVersion
   startProxyFn?: typeof startProxy
   spawnDaemonProcessFn?: typeof spawnDaemonProcess
   sleepFn?: typeof sleep
@@ -685,7 +686,7 @@ export async function connectProxyOrSpawnDaemon(deps: ConnectProxyDeps): Promise
   const sleepFn = deps.sleepFn ?? sleep
   const now = deps.now ?? Date.now
   const deadline = now() + DAEMON_STARTUP_TIMEOUT_MS
-  const version = serverVersion()
+  const version = (deps.serverVersionFn ?? serverVersion)()
   let spawned = false
   let sawOlderDaemon = false
   let lastError: unknown

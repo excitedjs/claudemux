@@ -15,6 +15,7 @@ import {
 } from '../src/server'
 import { CHANNEL_OWNER_TOOLS } from '../src/channel-owner'
 import type { ProxyConnection, ProxyConnectionDeps } from '../src/proxy-transport'
+import { isOlderPluginVersion, readPluginVersion } from '../src/version'
 
 async function waitFor(pred: () => boolean, ms = 1000): Promise<void> {
   const start = Date.now()
@@ -33,6 +34,11 @@ function fakeMcp() {
   }
   return { server, handlers, notifications }
 }
+
+const CURRENT_PLUGIN_VERSION = readPluginVersion(new URL('..', import.meta.url).pathname)
+const OLDER_PLUGIN_VERSION = isOlderPluginVersion('0.0.0', CURRENT_PLUGIN_VERSION)
+  ? '0.0.0'
+  : '0.0.0-alpha'
 
 describe('thin proxy MCP wiring', () => {
   let socketPath = ''
@@ -183,7 +189,7 @@ describe('connectProxyOrSpawnDaemon', () => {
   test('spawns the daemon once, then retries the proxy connection until it succeeds', async () => {
     const mcp = fakeMcp()
     const handle = {
-      connection: { close: vi.fn(), client: { callTool: vi.fn(), daemon: { daemonVersion: '0.4.0' } } },
+      connection: { close: vi.fn(), client: { callTool: vi.fn(), daemon: { daemonVersion: CURRENT_PLUGIN_VERSION } } },
       close: vi.fn(),
     } as unknown as ProxyHandle
     const startProxyFn = vi
@@ -200,6 +206,7 @@ describe('connectProxyOrSpawnDaemon', () => {
       baseDir: '/tmp/feishu-state',
       startProxyFn,
       spawnDaemonProcessFn,
+      serverVersionFn: () => CURRENT_PLUGIN_VERSION,
       sleepFn,
       now: () => 1000 + tick++,
     })
@@ -217,11 +224,11 @@ describe('connectProxyOrSpawnDaemon', () => {
   test('spawns a replacement daemon when the connected daemon is older', async () => {
     const mcp = fakeMcp()
     const oldHandle = {
-      connection: { close: vi.fn(), client: { callTool: vi.fn(), daemon: { daemonVersion: '0.1.0' } } },
+      connection: { close: vi.fn(), client: { callTool: vi.fn(), daemon: { daemonVersion: OLDER_PLUGIN_VERSION } } },
       close: vi.fn(),
     } as unknown as ProxyHandle
     const newHandle = {
-      connection: { close: vi.fn(), client: { callTool: vi.fn(), daemon: { daemonVersion: '0.4.0' } } },
+      connection: { close: vi.fn(), client: { callTool: vi.fn(), daemon: { daemonVersion: CURRENT_PLUGIN_VERSION } } },
       close: vi.fn(),
     } as unknown as ProxyHandle
     const startProxyFn = vi.fn().mockResolvedValueOnce(oldHandle).mockResolvedValueOnce(newHandle)
@@ -235,6 +242,7 @@ describe('connectProxyOrSpawnDaemon', () => {
       baseDir: '/tmp/feishu-state',
       startProxyFn,
       spawnDaemonProcessFn,
+      serverVersionFn: () => CURRENT_PLUGIN_VERSION,
       sleepFn,
       now: () => 1000 + tick++,
     })
@@ -248,11 +256,11 @@ describe('connectProxyOrSpawnDaemon', () => {
   test('falls back to the old daemon when replacement does not finish before timeout', async () => {
     const mcp = fakeMcp()
     const oldHandle = {
-      connection: { close: vi.fn(), client: { callTool: vi.fn(), daemon: { daemonVersion: '0.1.0' } } },
+      connection: { close: vi.fn(), client: { callTool: vi.fn(), daemon: { daemonVersion: OLDER_PLUGIN_VERSION } } },
       close: vi.fn(),
     } as unknown as ProxyHandle
     const fallbackHandle = {
-      connection: { close: vi.fn(), client: { callTool: vi.fn(), daemon: { daemonVersion: '0.1.0' } } },
+      connection: { close: vi.fn(), client: { callTool: vi.fn(), daemon: { daemonVersion: OLDER_PLUGIN_VERSION } } },
       close: vi.fn(),
     } as unknown as ProxyHandle
     const startProxyFn = vi.fn().mockResolvedValueOnce(oldHandle).mockResolvedValueOnce(fallbackHandle)
@@ -266,6 +274,7 @@ describe('connectProxyOrSpawnDaemon', () => {
       baseDir: '/tmp/feishu-state',
       startProxyFn,
       spawnDaemonProcessFn,
+      serverVersionFn: () => CURRENT_PLUGIN_VERSION,
       sleepFn,
       now: () => (calls++ < 2 ? 1000 : 20_000),
     })
@@ -284,7 +293,7 @@ describe('connectProxyOrSpawnDaemon', () => {
       close: orphanClose,
     } as unknown as ProxyHandle
     const goodHandle = {
-      connection: { close: vi.fn(), client: { callTool: vi.fn(), daemon: { daemonVersion: '0.4.0' } } },
+      connection: { close: vi.fn(), client: { callTool: vi.fn(), daemon: { daemonVersion: CURRENT_PLUGIN_VERSION } } },
       close: vi.fn(),
     } as unknown as ProxyHandle
     const startProxyFn = vi.fn().mockResolvedValueOnce(orphanHandle).mockResolvedValueOnce(goodHandle)
@@ -298,6 +307,7 @@ describe('connectProxyOrSpawnDaemon', () => {
       baseDir: '/tmp/feishu-state',
       startProxyFn,
       spawnDaemonProcessFn,
+      serverVersionFn: () => CURRENT_PLUGIN_VERSION,
       sleepFn,
       now: () => 1000 + tick++,
     })
