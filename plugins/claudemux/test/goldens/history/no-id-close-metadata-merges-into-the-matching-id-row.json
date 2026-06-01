@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stdout": "{\n  \"items\": [\n    {\n      \"id\": \"98cda2e0-c9f8-a65b-e3d7-3403e1b7854e\",\n      \"name\": \"claudemux-conftest-963ce972979c\",\n      \"closeStatus\": \"blocked\",\n      \"closeNotePreview\": \"marker was gone\"\n    }\n  ],\n  \"nextCursor\": null\n}\n",
+  "stderr": ""
+}

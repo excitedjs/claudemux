@@ -47,7 +47,6 @@ function parseEngine(value: string): EngineKind | TmResult {
 
 function parseState(value: string): HistoryRuntimeState | TmResult {
   if (
-    value === 'live' ||
     value === 'idle' ||
     value === 'busy' ||
     value === 'borrowed' ||
@@ -56,7 +55,7 @@ function parseState(value: string): HistoryRuntimeState | TmResult {
     value === 'unknown'
   ) return value
   return die(
-    `tm history: --state must be one of live,idle,busy,borrowed,killed,orphaned,unknown ` +
+    `tm history: --state must be one of idle,busy,borrowed,killed,orphaned,unknown ` +
       `(got: '${value}')`,
   )
 }

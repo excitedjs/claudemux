@@ -229,7 +229,6 @@ function rankState(state: HistoryRuntimeState): number {
     case 'busy': return 7
     case 'borrowed': return 6
     case 'idle': return 5
-    case 'live': return 4
     case 'killed': return 3
     case 'orphaned': return 2
     case 'unknown': return 1
@@ -579,7 +578,18 @@ function rowsFromClaude(env: NativeEnv, knownCwds: readonly string[], idPrefix: 
   return out
 }
 
-function rowsFromCodex(idPrefix: string | null): RowWithSort[] {
+function cwdAllowed(cwd: string | null, knownCwds: readonly string[], allowGlobal: boolean): boolean {
+  if (allowGlobal) return true
+  if (cwd === null) return false
+  const comparable = comparablePath(cwd)
+  return knownCwds.some((known) => comparablePath(known) === comparable)
+}
+
+function rowsFromCodex(
+  idPrefix: string | null,
+  knownCwds: readonly string[],
+  allowGlobal: boolean,
+): RowWithSort[] {
   const out: RowWithSort[] = []
   for (const file of listCodexRolloutFiles(process.env)) {
     if (!idMatches(file.threadId, idPrefix)) continue
@@ -592,6 +602,7 @@ function rowsFromCodex(idPrefix: string | null): RowWithSort[] {
     })()
     if (st === null) continue
     const header = readCodexHeader(file.path)
+    if (!cwdAllowed(header.cwd, knownCwds, allowGlobal)) continue
     const snapshot = readCodexRolloutSnapshot(file.threadId, process.env)
     const createdAtMs = header.createdAtMs ?? st.mtimeMs
     out.push({
@@ -730,11 +741,12 @@ export async function queryHistory(
     ...rowsFromArchived(),
   ]
   const knownCwds = knownCwdsFromRows(baseRows, query.repo, repoResolved)
-  const shouldScanGlobalLogs = query.id !== null || query.repo !== null
+  const shouldScanGlobalLogs = query.id !== null
+  const shouldScanKnownLogs = knownCwds.length > 0
   const allRows = normalizeRows([
     ...baseRows,
-    ...(knownCwds.length > 0 || shouldScanGlobalLogs ? rowsFromClaude(env, knownCwds, query.id) : []),
-    ...(shouldScanGlobalLogs ? rowsFromCodex(query.id) : []),
+    ...(shouldScanKnownLogs || shouldScanGlobalLogs ? rowsFromClaude(env, knownCwds, query.id) : []),
+    ...(shouldScanKnownLogs || shouldScanGlobalLogs ? rowsFromCodex(query.id, knownCwds, shouldScanGlobalLogs) : []),
   ])
   const filtered = filterRows(allRows, query, repoResolved)
   const page = filtered.slice(query.cursor, query.cursor + query.limit)
@@ -758,7 +770,7 @@ export function resolveHistoryId(
   const allRows = normalizeRows([
     ...baseRows,
     ...rowsFromClaude(env, knownCwdsFromRows(baseRows, null, null), idPrefix),
-    ...rowsFromCodex(idPrefix),
+    ...rowsFromCodex(idPrefix, [], true),
   ])
     .filter(({ row }) => idMatches(row.id, idPrefix))
     .map(({ row }) => withResumeCommand(row))

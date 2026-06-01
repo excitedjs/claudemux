@@ -129,6 +129,8 @@ Claude ids are transcript sids. Codex ids are thread ids. Without an explicit
 id, name form probes history and uses --engine to break ties.
 
 Fails if <name> is already running. --prompt sends a follow-up after relaunch.
+If a large Claude resume ever shows a summary/full-session selector, inspect
+with tm status <name> before sending; pressing Enter there chooses summary.
 `,
 
   last: `tm last <name> [--verbose]
@@ -150,9 +152,9 @@ tm kill --id <full-or-prefix> --status <merged|done|shelved|abandoned|blocked> [
 Stop a teammate and clear live markers. Dirty worktrees are preserved with a
 stderr note; clean worktrees are removed when the engine can do so safely.
 
---status records queryable close metadata for tm history --status. --note is a
-bounded note preview, not a query index. The --id form only records close
-metadata for an existing history row; it does not stop a process.
+--status records queryable close metadata for tm history --status. --note
+stores a bounded note preview; it is not a query index. The --id form only
+records close metadata for an existing history row; it does not stop a process.
 `,
 
   ask: `tm ask "<prompt>"
@@ -196,7 +198,7 @@ Time filters use the first in-file event timestamp; createdAtSource exposes
 mtime fallback. --name matches only indexed/live/last-killed attribution; for
 robust recovery prefer repo/id/time.
 
-States: live, idle, busy, borrowed, killed, orphaned, unknown.
+States: idle, busy, borrowed, killed, orphaned, unknown.
 Close statuses: merged, done, shelved, abandoned, blocked.
 `,
 

@@ -14,7 +14,6 @@ import type { EngineKind, TeammateName } from '../engines/types'
 import { identityRoot } from './identity-store'
 
 export type HistoryRuntimeState =
-  | 'live'
   | 'idle'
   | 'busy'
   | 'borrowed'
@@ -231,6 +230,31 @@ function mergeRecord(base: HistoryIndexRecord | undefined, event: HistoryIndexEv
   }
 }
 
+function mergeRecordFields(base: HistoryIndexRecord | undefined, extra: HistoryIndexRecord): HistoryIndexRecord {
+  return {
+    id: base?.id ?? extra.id,
+    engine: base?.engine ?? extra.engine,
+    name: base?.name ?? extra.name,
+    repo: base?.repo ?? extra.repo,
+    cwd: base?.cwd ?? extra.cwd,
+    worktreeSlug: base?.worktreeSlug ?? extra.worktreeSlug,
+    branch: base?.branch ?? extra.branch,
+    baseRef: base?.baseRef ?? extra.baseRef,
+    createdAt: base?.createdAt ?? extra.createdAt,
+    intent: base?.intent ?? extra.intent,
+    closeStatus: extra.closeStatus ?? base?.closeStatus ?? null,
+    closeNotePreview: extra.closeNotePreview ?? base?.closeNotePreview ?? null,
+  }
+}
+
+function attributionKey(
+  input: Pick<HistoryIndexEvent, 'engine' | 'name' | 'cwd' | 'repo'>,
+): string | null {
+  if (input.engine === null || input.name === null) return null
+  const cwd = input.cwd ?? input.repo
+  return cwd === null ? null : `${input.engine}:${input.name}:${cwd}`
+}
+
 function eventKey(event: HistoryIndexEvent): string {
   if (event.id !== null) return `id:${event.id}`
   const engine = event.engine ?? 'unknown'
@@ -241,8 +265,24 @@ function eventKey(event: HistoryIndexEvent): string {
 
 export function listHistoryIndexRecords(): readonly HistoryIndexRecord[] {
   const map = new Map<string, HistoryIndexRecord>()
+  const attributedIdKeys = new Map<string, string>()
   for (const event of readHistoryEvents()) {
-    const key = eventKey(event)
+    const attr = attributionKey(event)
+    let key = eventKey(event)
+    if (event.id !== null) {
+      key = `id:${event.id}`
+      if (attr !== null) {
+        const openKey = eventKey({ ...event, id: null })
+        const openRecord = map.get(openKey)
+        if (openRecord !== undefined) {
+          map.set(key, mergeRecordFields(map.get(key), openRecord))
+          map.delete(openKey)
+        }
+        attributedIdKeys.set(attr, key)
+      }
+    } else if (attr !== null) {
+      key = attributedIdKeys.get(attr) ?? key
+    }
     map.set(key, mergeRecord(map.get(key), event))
   }
   return [...map.values()]

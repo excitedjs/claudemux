@@ -1186,6 +1186,10 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
         setup: () => ({ args: ['--fields', 'id,nope'] }),
       },
       {
+        name: 'a removed live state filter → the valid-state error',
+        setup: () => ({ args: ['--state', 'live'] }),
+      },
+      {
         name: 'repo present, no project dir → empty JSON items',
         setup: () => {
           const repo = uniqueName()
@@ -1280,6 +1284,34 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
         },
       },
       {
+        name: 'unscoped grep scans Codex rollouts for a known cwd',
+        setup: () => {
+          const repo = uniqueName()
+          const threadId = uniqueUuid()
+          makeRepoDir(repo)
+          const repoPath = realpathSync(join(dispatcherDir, repo))
+          writeFileSync(historyIndexFile(), `${JSON.stringify({
+            schema: 1,
+            event: 'session',
+            recordedAt: '2026-05-23T12:00:00.000Z',
+            id: threadId,
+            engine: 'codex',
+            name: repo,
+            repo: repoPath,
+            cwd: repoPath,
+            worktreeSlug: null,
+            branch: null,
+            baseRef: null,
+            createdAt: '2026-05-23T12:00:00.000Z',
+            intent: 'indexed task',
+            closeStatus: null,
+            closeNotePreview: null,
+          })}\n`)
+          writeCodexHistoryRollout(repo, threadId, 'codex unique prompt')
+          return { args: ['--grep', 'codex unique', '--fields', 'id,engine,topic'] }
+        },
+      },
+      {
         name: 'a session with no user prompt → null topic',
         setup: () => {
           const repo = uniqueName()
@@ -1369,6 +1401,51 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
             }),
           ].join('\n') + '\n')
           return { args: ['--status', 'done', '--grep', 'ledger', '--fields', 'id,createdAt,intent,closeStatus,closeNotePreview'] }
+        },
+      },
+      {
+        name: 'no-id close metadata merges into the matching id row',
+        setup: () => {
+          const id = uniqueUuid()
+          const name = uniqueName()
+          const cwd = '/repo/no-id-close'
+          writeFileSync(historyIndexFile(), [
+            JSON.stringify({
+              schema: 1,
+              event: 'session',
+              recordedAt: '2026-05-23T12:00:00.000Z',
+              id,
+              engine: 'claude',
+              name,
+              repo: cwd,
+              cwd,
+              worktreeSlug: null,
+              branch: null,
+              baseRef: null,
+              createdAt: '2026-05-23T12:00:00.000Z',
+              intent: 'finish without marker',
+              closeStatus: null,
+              closeNotePreview: null,
+            }),
+            JSON.stringify({
+              schema: 1,
+              event: 'close',
+              recordedAt: '2026-05-23T12:30:00.000Z',
+              id: null,
+              engine: 'claude',
+              name,
+              repo: cwd,
+              cwd,
+              worktreeSlug: null,
+              branch: null,
+              baseRef: null,
+              createdAt: null,
+              intent: null,
+              closeStatus: 'blocked',
+              closeNotePreview: 'marker was gone',
+            }),
+          ].join('\n') + '\n')
+          return { args: ['--status', 'blocked', '--fields', 'id,name,closeStatus,closeNotePreview'] }
         },
       },
     ],
