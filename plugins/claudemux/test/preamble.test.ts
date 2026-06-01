@@ -176,6 +176,18 @@ describe('resolvePreamble — profile lookup', () => {
     if (!('error' in r)) throw new Error('expected an error')
     expect(r.error.stderr).toContain('must be a JSON object')
   })
+
+  test('an unreadable profile (a directory at the path) fails loud, not a no-op', () => {
+    // A directory where the file is expected is a non-ENOENT read error: the
+    // operator put *something* there, so it must not be silently skipped.
+    mkdirSync(preambleProfilePath(dispatcherDir))
+    const r = resolvePreamble(dispatcherDir, repo)
+    expect('error' in r).toBe(true)
+    if (!('error' in r)) throw new Error('expected an error')
+    expect(r.error.code).toBe(1)
+    expect(r.error.stderr).toContain(preambleProfilePath(dispatcherDir))
+    expect(r.error.stderr).toContain('--no-preamble')
+  })
 })
 
 // ─── applyPreamble: prepend shape ─────────────────────────────────────────

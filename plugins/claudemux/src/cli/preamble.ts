@@ -72,10 +72,12 @@ function normalizeKey(key: string): string {
 /**
  * Resolve the preamble for a fresh `tm spawn` into `repo`.
  *
- *  - No profile file → `{ preamble: null }` (feature is opt-in; no-op).
- *  - Profile present but unreadable / invalid JSON / wrong top-level shape
- *    → `{ error }` (fail loud: the operator opted in, so a silently dropped
- *    reminder is worse than a clear config error they can fix).
+ *  - No profile file (`ENOENT`) → `{ preamble: null }` (feature is opt-in;
+ *    no-op).
+ *  - Profile present but unreadable / a directory / invalid JSON / wrong
+ *    top-level shape → `{ error }` (fail loud: the operator put something
+ *    there, so a silently dropped reminder is worse than a clear config
+ *    error they can fix).
  *  - Per-repo entry present → that text wins. An explicit empty entry opts
  *    that repo out (returns `null`) without falling through to `default`.
  *  - Otherwise → the dispatcher-wide `default`, or `null` when absent.
@@ -91,9 +93,21 @@ export function resolvePreamble(
   let raw: string
   try {
     raw = readFileSync(path, 'utf8')
-  } catch {
-    // Missing file is the common, opt-out-by-default case — a true no-op.
-    return { preamble: null }
+  } catch (err) {
+    // A genuinely missing file is the opt-out-by-default case — a true
+    // no-op. Any other read error (unreadable, a directory, …) means the
+    // operator put something there, so fail loud rather than silently
+    // dropping the reminder they opted in to.
+    if ((err as NodeJS.ErrnoException | null)?.code === 'ENOENT') {
+      return { preamble: null }
+    }
+    const reason = err instanceof Error ? err.message : String(err)
+    return {
+      error: die(
+        `tm spawn: ${path} could not be read (${reason}). ` +
+          'Fix it or pass --no-preamble.',
+      ),
+    }
   }
 
   let profile: PreambleProfile
