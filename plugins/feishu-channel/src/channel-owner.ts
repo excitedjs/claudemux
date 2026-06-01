@@ -265,8 +265,14 @@ function resolveSelector(
 ): SelectorResult {
   const sessionId =
     typeof args.session_id === 'string' && args.session_id.length > 0 ? args.session_id : undefined
-  const match = parseMatch(args.match)
-  if (sessionId !== undefined && match !== undefined) {
+  // Distinguish an omitted `match` from one that is present but malformed: a
+  // present `match` is a contract the caller asked the daemon to honor, so an
+  // empty / non-object / non-string-valued `match` is a hard error, never a
+  // silent fall-through to acquire-self (which would route the channel somewhere
+  // the caller did not intend). Schema validation is best-effort over MCP, so
+  // the daemon validates the shape itself.
+  const matchPresent = args.match !== undefined && args.match !== null
+  if (sessionId !== undefined && matchPresent) {
     return { kind: 'error', message: 'pass only one of session_id / match' }
   }
   if (sessionId !== undefined) {
@@ -274,7 +280,14 @@ function resolveSelector(
     if (!target?.session) return { kind: 'error', message: `no live channel proxy session: ${sessionId}` }
     return { kind: 'target', target, session: target.session }
   }
-  if (match !== undefined) {
+  if (matchPresent) {
+    const match = parseMatch(args.match)
+    if (match === null) {
+      return {
+        kind: 'error',
+        message: 'match must be a non-empty object whose values are all strings',
+      }
+    }
     const entries = Object.entries(match)
     const matched = [...connections].filter(
       (conn) => conn.session !== null && entries.every(([k, v]) => conn.session?.metadata[k] === v),
@@ -295,14 +308,23 @@ function resolveSelector(
   return { kind: 'none' }
 }
 
-/** A `match` selector is a non-empty object of string→string pairs; anything else is treated as absent. */
-function parseMatch(value: unknown): Record<string, string> | undefined {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+/**
+ * Parse a `match` selector. Valid is a non-empty object whose every value is a
+ * string; `null` signals invalid (non-object, array, empty, or any non-string
+ * value) so the caller can reject it rather than silently narrowing or ignoring
+ * it. Dropping a non-string key would widen the match beyond what the caller
+ * asked for, so any non-string value invalidates the whole selector.
+ */
+function parseMatch(value: unknown): Record<string, string> | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length === 0) return null
   const out: Record<string, string> = {}
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof v === 'string') out[k] = v
+  for (const [k, v] of entries) {
+    if (typeof v !== 'string') return null
+    out[k] = v
   }
-  return Object.keys(out).length > 0 ? out : undefined
+  return out
 }
 
 function toolJson(value: unknown): CallToolResult {

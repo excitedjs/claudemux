@@ -787,10 +787,17 @@ export function deriveProxyMetadata(
   env: Record<string, string | undefined> = process.env,
 ): Record<string, string> {
   const metadata: Record<string, string> = {}
-  // Do not fall back to `process.cwd()`: the proxy's own cwd is the plugin dir
-  // (it launches via `npm --prefix`), not the session workspace.
-  const cwdSource = env.CLAUDE_PROJECT_DIR ?? env.INIT_CWD
-  if (cwdSource && cwdSource.length > 0) metadata.cwd = safeRealpath(cwdSource)
+  // Non-empty fallback (mirrors `stableProxySessionId`): an empty
+  // `CLAUDE_PROJECT_DIR` must not suppress a valid `INIT_CWD`. Do not fall back
+  // to `process.cwd()`: the proxy's own cwd is the plugin dir (it launches via
+  // `npm --prefix`), not the session workspace.
+  const cwdSource =
+    env.CLAUDE_PROJECT_DIR && env.CLAUDE_PROJECT_DIR.length > 0
+      ? env.CLAUDE_PROJECT_DIR
+      : env.INIT_CWD && env.INIT_CWD.length > 0
+        ? env.INIT_CWD
+        : undefined
+  if (cwdSource) metadata.cwd = safeRealpath(cwdSource)
   Object.assign(metadata, claudemuxIdentityFromEnv(env))
   return metadata
 }

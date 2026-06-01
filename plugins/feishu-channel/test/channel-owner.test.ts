@@ -284,6 +284,36 @@ describe('ChannelOwnerState', () => {
     }
   })
 
+  test('a present but invalid match is an error, not a silent acquire-self', async () => {
+    const owner = new ChannelOwnerState()
+    const dispatcher = fakeConn(session('dispatcher-1', 'dispatcher'))
+    const tm = fakeConn(session('tm-1', 'session', { teammate_name: 'api-worker' }))
+    const conns = new Set([dispatcher, tm])
+    owner.register(dispatcher)
+
+    for (const badMatch of [
+      {}, // empty object
+      { teammate_name: 123 }, // non-string value
+      { teammate_name: 'api-worker', cwd: 123 }, // a non-string value must not be silently dropped
+      [], // not an object
+      'api-worker', // not an object
+    ]) {
+      const result = await owner.handleTool(
+        dispatcher,
+        'feishu_channel_acquire',
+        { match: badMatch },
+        conns,
+      )
+      expect(result.handled).toBe(true)
+      if (result.handled) {
+        expect(result.result.isError).toBe(true)
+        expect(text(result.result)).toContain('match must be a non-empty object')
+      }
+      // The dispatcher must NOT have silently acquired itself off a bad selector.
+      expect(owner.select(conns)).toBe(dispatcher)
+    }
+  })
+
   test('grant with neither session_id nor match is an error', async () => {
     const owner = new ChannelOwnerState()
     const dispatcher = fakeConn(session('dispatcher-1', 'dispatcher'))

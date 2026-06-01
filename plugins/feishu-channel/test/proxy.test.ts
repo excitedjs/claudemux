@@ -198,6 +198,16 @@ describe('deriveProxyMetadata', () => {
     expect(deriveProxyMetadata({})).toEqual({})
   })
 
+  test('an empty CLAUDE_PROJECT_DIR falls back to INIT_CWD instead of suppressing cwd', () => {
+    expect(deriveProxyMetadata({ CLAUDE_PROJECT_DIR: '', INIT_CWD: '/nonexistent-ws/npm' })).toEqual({
+      cwd: '/nonexistent-ws/npm',
+    })
+  })
+
+  test('an empty CLAUDE_PROJECT_DIR with no INIT_CWD emits no cwd', () => {
+    expect(deriveProxyMetadata({ CLAUDE_PROJECT_DIR: '' })).toEqual({})
+  })
+
   test('rejects a malformed teammate name', () => {
     expect(claudemuxIdentityFromEnv({ CLAUDEMUX_TEAMMATE_NAME: 'bad name/with spaces' })).toEqual({})
     expect(claudemuxIdentityFromEnv({ CLAUDEMUX_TEAMMATE_NAME: 'ok-name_1' })).toEqual({
