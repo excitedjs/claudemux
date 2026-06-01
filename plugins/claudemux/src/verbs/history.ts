@@ -1,190 +1,249 @@
 /**
- * `tm history <name> [index]` — turn-by-turn history. Decision multi-engine-tui-architecture
- * §"`history` and `mem` stay" keeps the verb alive on both engines.
- * The Claude engine reads `~/.claude/projects/<encoded>/*.jsonl`;
- * the Codex engine reads rollout JSONL files from `~/.codex/sessions`.
- * List mode merges both engines by mtime; detail mode accepts either a
- * Claude sid prefix or a Codex thread-id prefix.
+ * `tm history` — agent-facing teammate session lookup.
+ *
+ * The public grammar is flag-only. The retired `tm history <name> [id]`
+ * shape is deliberately rejected so dispatchers learn to query by the
+ * durable axes: repo, id, time, intent, state, and close status.
  */
 
-import { formatHistory } from './format'
-import type { Engine } from '../engines/engine'
-import type {
-  EngineKind,
-  HistoryListEntry,
-  HistoryRequest,
-  HistoryResult,
-  TeammateName,
-} from '../engines/types'
+import type { EngineKind } from '../engines/types'
 import type { TmResult } from '../tm'
+import type { NativeEnv } from '../env'
 import type { VerbContext } from './context'
-import { resolveTargetEngine } from './resolve'
-import { hasCodexHistoryForCwd } from '../engines/codex/history'
-import { fmtAge } from '../engines/claude/clock'
+import {
+  queryHistory,
+  validateHistoryFields,
+  type HistoryFormat,
+  type HistoryQuery,
+} from './history-query'
+import type { HistoryCloseStatus, HistoryRuntimeState } from '../persistence/history-index'
 
-export interface HistoryArgs {
-  readonly name: TeammateName
-  readonly cwd: string | null
-  /** `null` = list view; non-null = engine-specific detail selector. */
-  readonly index: string | null
+function die(message: string): TmResult {
+  return { code: 1, stdout: '', stderr: `tm: ${message}\n` }
 }
 
-interface HistoryTarget {
-  readonly engine: Engine
-  readonly resolved: boolean
-  readonly codexFromHistory: boolean
+function parseTimeFlag(flag: string, value: string): number | TmResult {
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(value)
+    ? `${value.replace(' ', 'T')}Z`
+    : value
+  const parsed = Date.parse(normalized)
+  if (!Number.isFinite(parsed)) return die(`tm history: ${flag} is not a parseable date/time: ${value}`)
+  return parsed
 }
 
-async function resolveHistoryTarget(args: HistoryArgs, ctx: VerbContext): Promise<HistoryTarget | TmResult> {
-  const resolved = await ctx.router.resolve(args.name)
-  const codexFromHistory =
-    resolved === null &&
-    args.cwd !== null &&
-    ctx.engines.get('codex') !== undefined &&
-    hasCodexHistoryForCwd(args.cwd, ctx.engineContext.env)
-  const engine = codexFromHistory
-    ? ctx.engines.get('codex')!
-    : resolved?.engine ?? await resolveTargetEngine(args.name, ctx)
-  if ('code' in engine) return engine
-  return { engine, resolved: resolved !== null, codexFromHistory }
-}
-
-function historyCandidateEngines(target: HistoryTarget, ctx: VerbContext): readonly Engine[] {
-  const engines: Engine[] = []
-  const add = (engine: Engine | undefined): void => {
-    if (engine === undefined) return
-    if (!engines.some((candidate) => candidate.kind === engine.kind)) engines.push(engine)
+function parsePageInt(flag: string, value: string): number | TmResult {
+  const n = Number(value)
+  const min = flag === '--limit' ? 1 : 0
+  if (!Number.isInteger(n) || n < min) {
+    return die(`tm history: ${flag} must be ${min === 0 ? 'a non-negative' : 'a positive'} integer`)
   }
-
-  if (target.engine.kind === 'codex' && !target.codexFromHistory && !target.resolved) {
-    add(target.engine)
-    return engines
-  }
-
-  add(ctx.engines.get('claude'))
-  add(ctx.engines.get('codex'))
-  add(target.engine)
-  return engines
+  return n
 }
 
-/**
- * Detail-mode prefix → engine, when the UUID version digit is reachable
- * inside the prefix. Claude sids are random UUIDv4 (`xxxxxxxx-xxxx-4xxx-...`);
- * Codex thread ids are UUIDv7 (`xxxxxxxx-xxxx-7xxx-...`). Stripping `-` and
- * inspecting the 13th hex char (index 12) gives the version regardless of
- * whether the caller pasted the canonical dashed form or a raw hex run.
- * Returns `null` when the prefix is too short to reach the version digit,
- * or when the version digit is neither `4` nor `7` — both cases fall back
- * to the existing dual-engine probe rather than silently misroute.
- */
-function detailEngineFromPrefix(prefix: string): EngineKind | null {
-  const stripped = prefix.replace(/-/g, '')
-  if (stripped.length < 13) return null
-  const versionChar = stripped[12]
-  if (versionChar === '4') return 'claude'
-  if (versionChar === '7') return 'codex'
-  return null
+function parseEngine(value: string): EngineKind | TmResult {
+  if (value === 'claude' || value === 'codex') return value
+  return die(`tm history: --engine must be 'claude' or 'codex' (got: '${value}')`)
 }
 
-function fmtSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`
-  if (bytes < 1048576) return `${Math.trunc(bytes / 1024)}K`
-  if (bytes < 1073741824) return `${toFixed1HalfEven(bytes / 1048576)}M`
-  return `${toFixed1HalfEven(bytes / 1073741824)}G`
-}
-
-function toFixed1HalfEven(value: number): string {
-  const tenths = value * 10
-  const floor = Math.floor(tenths)
-  const frac = tenths - floor
-  let rounded: number
-  if (frac < 0.5) rounded = floor
-  else if (frac > 0.5) rounded = floor + 1
-  else rounded = floor % 2 === 0 ? floor : floor + 1
-  return (rounded / 10).toFixed(1)
-}
-
-function sortedHistoryEntries(entries: readonly HistoryListEntry[]): readonly HistoryListEntry[] {
-  return [...entries].sort((a, b) =>
-    b.mtimeMs - a.mtimeMs ||
-    (a.engine < b.engine ? -1 : a.engine > b.engine ? 1 : 0) ||
-    (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+function parseState(value: string): HistoryRuntimeState | TmResult {
+  if (
+    value === 'live' ||
+    value === 'idle' ||
+    value === 'busy' ||
+    value === 'borrowed' ||
+    value === 'killed' ||
+    value === 'orphaned' ||
+    value === 'unknown'
+  ) return value
+  return die(
+    `tm history: --state must be one of live,idle,busy,borrowed,killed,orphaned,unknown ` +
+      `(got: '${value}')`,
   )
 }
 
-async function formatHistoryEntries(
-  entries: readonly HistoryListEntry[],
-  ctx: VerbContext,
-): Promise<TmResult> {
-  const nowMs = ctx.engineContext.now()
-  const rows: string[][] = [[' ', 'ENGINE', 'ID', 'AGE', 'SIZE', 'TOPIC']]
-  // Full id, not an 8-char prefix: `tm resume` requires the canonical UUID
-  // and silently rejects a prefix with a misleading "wrong repo" error.
-  // Listing the full id keeps history → resume copy-paste lossless.
-  for (const entry of sortedHistoryEntries(entries)) {
-    rows.push([
-      entry.active ? '*' : ' ',
-      entry.engine,
-      entry.id,
-      fmtAge(Math.max(0, Math.floor((nowMs - entry.mtimeMs) / 1000))),
-      fmtSize(entry.size),
-      entry.topic,
-    ])
-  }
-  return ctx.runColumn(`${rows.map((row) => row.join('\t')).join('\n')}\n`)
+function parseCloseStatus(value: string): HistoryCloseStatus | TmResult {
+  if (
+    value === 'merged' ||
+    value === 'done' ||
+    value === 'shelved' ||
+    value === 'abandoned' ||
+    value === 'blocked'
+  ) return value
+  return die(
+    `tm history: --status must be one of merged,done,shelved,abandoned,blocked ` +
+      `(got: '${value}')`,
+  )
 }
 
-function raw(result: HistoryResult): TmResult {
-  return formatHistory(result)
+function needsValue(rest: readonly string[], index: number, flag: string): string | TmResult {
+  if (index + 1 >= rest.length) return die(`tm history: ${flag} requires a value`)
+  return rest[index + 1]!
 }
 
-export async function historyVerb(args: HistoryArgs, ctx: VerbContext): Promise<TmResult> {
-  const target = await resolveHistoryTarget(args, ctx)
-  if ('code' in target) return target
-  const req: HistoryRequest = { name: args.name, cwd: args.cwd, index: args.index }
+export function parseHistoryArgs(rest: readonly string[]): HistoryQuery | { error: TmResult } {
+  let repo: string | null = null
+  let name: string | null = null
+  let id: string | null = null
+  let engine: EngineKind | null = null
+  let sinceMs: number | null = null
+  let untilMs: number | null = null
+  let state: HistoryRuntimeState | null = null
+  let closeStatus: HistoryCloseStatus | null = null
+  let grep: string | null = null
+  let limit = 50
+  let cursor = 0
+  let fields: readonly string[] | null = null
+  let format: HistoryFormat = 'json'
 
-  if (args.index !== null) {
-    // UUID-version short-circuit: when the prefix is long enough to expose
-    // the version digit (claude=v4, codex=v7), route to that one engine and
-    // skip the cross-engine probe. The other engine cannot hold a session
-    // whose id begins with the wrong version digit, so probing it would only
-    // walk a rollout tree that is guaranteed to miss.
-    const shortCircuit = detailEngineFromPrefix(args.index)
-    const shortCircuitEngine = shortCircuit !== null ? ctx.engines.get(shortCircuit) : undefined
-    if (shortCircuitEngine !== undefined) {
-      return raw(await shortCircuitEngine.history(req, ctx.engineContext))
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i]!
+    const take = (flag: string): string | TmResult => {
+      const value = needsValue(rest, i, flag)
+      if (typeof value === 'string') i++
+      return value
     }
 
-    const engines = historyCandidateEngines(target, ctx)
-    const results = await Promise.all(
-      engines.map(async (engine) => ({ engine, result: await engine.history(req, ctx.engineContext) })),
-    )
-    const successes = results
-      .map(({ result }) => raw(result))
-      .filter((result) => result.code === 0)
-    if (successes.length === 1) return successes[0]!
-    if (successes.length > 1) {
+    if (arg === '--repo') {
+      const value = take('--repo')
+      if (typeof value !== 'string') return { error: value }
+      repo = value
+    } else if (arg.startsWith('--repo=')) {
+      repo = arg.slice('--repo='.length)
+    } else if (arg === '--name') {
+      const value = take('--name')
+      if (typeof value !== 'string') return { error: value }
+      name = value
+    } else if (arg.startsWith('--name=')) {
+      name = arg.slice('--name='.length)
+    } else if (arg === '--id') {
+      const value = take('--id')
+      if (typeof value !== 'string') return { error: value }
+      id = value
+    } else if (arg.startsWith('--id=')) {
+      id = arg.slice('--id='.length)
+    } else if (arg === '--engine') {
+      const value = take('--engine')
+      if (typeof value !== 'string') return { error: value }
+      const parsed = parseEngine(value)
+      if (typeof parsed !== 'string') return { error: parsed }
+      engine = parsed
+    } else if (arg.startsWith('--engine=')) {
+      const parsed = parseEngine(arg.slice('--engine='.length))
+      if (typeof parsed !== 'string') return { error: parsed }
+      engine = parsed
+    } else if (arg === '--since') {
+      const value = take('--since')
+      if (typeof value !== 'string') return { error: value }
+      const parsed = parseTimeFlag('--since', value)
+      if (typeof parsed !== 'number') return { error: parsed }
+      sinceMs = parsed
+    } else if (arg.startsWith('--since=')) {
+      const parsed = parseTimeFlag('--since', arg.slice('--since='.length))
+      if (typeof parsed !== 'number') return { error: parsed }
+      sinceMs = parsed
+    } else if (arg === '--until') {
+      const value = take('--until')
+      if (typeof value !== 'string') return { error: value }
+      const parsed = parseTimeFlag('--until', value)
+      if (typeof parsed !== 'number') return { error: parsed }
+      untilMs = parsed
+    } else if (arg.startsWith('--until=')) {
+      const parsed = parseTimeFlag('--until', arg.slice('--until='.length))
+      if (typeof parsed !== 'number') return { error: parsed }
+      untilMs = parsed
+    } else if (arg === '--state') {
+      const value = take('--state')
+      if (typeof value !== 'string') return { error: value }
+      const parsed = parseState(value)
+      if (typeof parsed !== 'string') return { error: parsed }
+      state = parsed
+    } else if (arg.startsWith('--state=')) {
+      const parsed = parseState(arg.slice('--state='.length))
+      if (typeof parsed !== 'string') return { error: parsed }
+      state = parsed
+    } else if (arg === '--status') {
+      const value = take('--status')
+      if (typeof value !== 'string') return { error: value }
+      const parsed = parseCloseStatus(value)
+      if (typeof parsed !== 'string') return { error: parsed }
+      closeStatus = parsed
+    } else if (arg.startsWith('--status=')) {
+      const parsed = parseCloseStatus(arg.slice('--status='.length))
+      if (typeof parsed !== 'string') return { error: parsed }
+      closeStatus = parsed
+    } else if (arg === '--grep') {
+      const value = take('--grep')
+      if (typeof value !== 'string') return { error: value }
+      grep = value
+    } else if (arg.startsWith('--grep=')) {
+      grep = arg.slice('--grep='.length)
+    } else if (arg === '--limit') {
+      const value = take('--limit')
+      if (typeof value !== 'string') return { error: value }
+      const parsed = parsePageInt('--limit', value)
+      if (typeof parsed !== 'number') return { error: parsed }
+      limit = parsed
+    } else if (arg.startsWith('--limit=')) {
+      const parsed = parsePageInt('--limit', arg.slice('--limit='.length))
+      if (typeof parsed !== 'number') return { error: parsed }
+      limit = parsed
+    } else if (arg === '--cursor') {
+      const value = take('--cursor')
+      if (typeof value !== 'string') return { error: value }
+      const parsed = parsePageInt('--cursor', value)
+      if (typeof parsed !== 'number') return { error: parsed }
+      cursor = parsed
+    } else if (arg.startsWith('--cursor=')) {
+      const parsed = parsePageInt('--cursor', arg.slice('--cursor='.length))
+      if (typeof parsed !== 'number') return { error: parsed }
+      cursor = parsed
+    } else if (arg === '--fields') {
+      const value = take('--fields')
+      if (typeof value !== 'string') return { error: value }
+      fields = value.split(',').filter((field) => field.length > 0)
+    } else if (arg.startsWith('--fields=')) {
+      fields = arg.slice('--fields='.length).split(',').filter((field) => field.length > 0)
+    } else if (arg === '--json') {
+      format = 'json'
+    } else if (arg === '--oneline') {
+      format = 'oneline'
+    } else if (arg === '--table') {
+      format = 'table'
+    } else if (arg.startsWith('-')) {
+      return { error: die(`tm history: unknown flag: ${arg}`) }
+    } else {
       return {
-        code: 1,
-        stdout: '',
-        stderr: `tm: history: prefix '${args.index}' matches entries in multiple engines - be more specific\n`,
+        error: die(
+          `tm history: positional arguments were removed. Use ` +
+            `--name ${arg} to filter by teammate attribution, or --id <id> for a session.`,
+        ),
       }
     }
-    const targetResult = results.find(({ engine }) => engine.kind === target.engine.kind)?.result ??
-      await target.engine.history(req, ctx.engineContext)
-    return raw(targetResult)
   }
 
-  const engines = historyCandidateEngines(target, ctx)
-  const results = await Promise.all(
-    engines.map(async (engine) => ({ engine, result: await engine.history(req, ctx.engineContext) })),
-  )
-  const entries = results.flatMap(({ result }) =>
-    result.kind === 'list' && result.entries !== undefined ? [...result.entries] : [],
-  )
-  if (entries.length > 0) return formatHistoryEntries(entries, ctx)
+  if (fields !== null) {
+    const err = validateHistoryFields(fields)
+    if (err !== null) return { error: err }
+  }
+  return {
+    repo,
+    name,
+    id,
+    engine,
+    sinceMs,
+    untilMs,
+    state,
+    closeStatus,
+    grep,
+    limit,
+    cursor,
+    fields,
+    format,
+  }
+}
 
-  const targetResult = results.find(({ engine }) => engine.kind === target.engine.kind)?.result ??
-    await target.engine.history(req, ctx.engineContext)
-  return raw(targetResult)
+export async function historyVerb(query: HistoryQuery, ctx: VerbContext, env: NativeEnv): Promise<TmResult> {
+  const listings = (await Promise.all(ctx.engines.registered().map((engine) => engine.list(ctx.engineContext))))
+    .flatMap((rows) => rows)
+  return queryHistory(query, listings, env)
 }

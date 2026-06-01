@@ -14,7 +14,6 @@
 import type {
   CompactResult,
   ContextResult,
-  HistoryResult,
   KillResult,
   RawTmResult,
   ReloadResult,
@@ -175,23 +174,6 @@ export function formatCompact(result: CompactResult): TmResult {
       return { code: 0, stdout: '', stderr: `  not supported: ${result.reason}\n` }
     case 'failed':
       return { code: 1, stdout: '', stderr: `tm: compact: ${result.message}\n` }
-  }
-}
-
-export function formatHistory(result: HistoryResult): TmResult {
-  const raw = rawTmResult(result)
-  if (raw !== null) return raw
-  switch (result.kind) {
-    case 'list': {
-      const lines = result.turns.map((t) => `#${t.index}\t${t.summary}`)
-      return { code: 0, stdout: `${lines.join('\n')}\n`, stderr: '' }
-    }
-    case 'detail':
-      return { code: 0, stdout: `#${result.turn.index}\t${result.turn.summary}\n`, stderr: '' }
-    case 'not-supported':
-      return { code: 0, stdout: '', stderr: `  not supported: ${result.reason}\n` }
-    case 'failed':
-      return { code: 1, stdout: '', stderr: `tm: history: ${result.message}\n` }
   }
 }
 

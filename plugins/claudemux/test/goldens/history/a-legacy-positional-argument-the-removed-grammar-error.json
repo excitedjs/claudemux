@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: tm history: positional arguments were removed. Use --name claudemux-conftest-b733e34db3fe to filter by teammate attribution, or --id <id> for a session.\n"
+}

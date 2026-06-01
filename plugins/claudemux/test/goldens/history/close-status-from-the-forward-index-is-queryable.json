@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stdout": "{\n  \"items\": [\n    {\n      \"id\": \"965f5f55-d30f-bf53-44db-1eaaaf702181\",\n      \"createdAt\": \"2026-05-23T12:00:00.000Z\",\n      \"intent\": \"review dispatcher ledger\",\n      \"closeStatus\": \"done\",\n      \"closeNotePreview\": \"merged in the linked PR\"\n    }\n  ],\n  \"nextCursor\": null\n}\n",
+  "stderr": ""
+}

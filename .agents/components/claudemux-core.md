@@ -15,7 +15,7 @@ this document is the **component** view — what the orchestration modules are
 and what contracts they hold.
 
 > **The verb layer routes teammate verbs through the Engine layer.**
-> All 18 `tm` verbs are implemented in TypeScript and dispatched by
+> All 17 `tm` verbs are implemented in TypeScript and dispatched by
 > [`cli/dispatch.ts`](/plugins/claudemux/src/cli/dispatch.ts); help text lives in
 > [`help.ts`](/plugins/claudemux/src/help.ts). The user-installed
 > [`bin/tm`](/plugins/claudemux/bin/tm) is a small bash launcher that
@@ -41,8 +41,8 @@ and what contracts they hold.
 > (`ls`, `states`, `status`, `kill`, `spawn`, `send`, `wait`, `compact`,
 > `resume`, `last`, `ctx`, `history`, `mem`, `reload`) route through
 > `verbs/<v>.ts` -> router / `EngineRegistry` -> engine. Dispatcher-only and
-> diagnostic verbs (`archive`, `poll`, `doctor`, `ask`) stay local to the CLI
-> or their dedicated helper modules.
+> diagnostic verbs (`poll`, `doctor`, `ask`) stay local to the CLI or their
+> dedicated helper modules.
 >
 > Codex teammates are driven by `CodexEngine`. `tm spawn <name> --engine codex`,
 > `tm send <name>`, `tm wait <name>`, `tm resume <name> [<thread-id>]`,
@@ -53,12 +53,13 @@ and what contracts they hold.
 > rollout writes; `tm states` renders LAST / PREVIEW from the current
 > thread's latest assistant text when the rollout is present. `tm last`,
 > `tm ctx`, and `tm history` read Codex's
-> append-only rollout JSONL files under `~/.codex/sessions/YYYY/MM/DD/`;
-> `tm history` filters them by recorded cwd. In list mode it merges Claude
-> transcript sessions and Codex rollout threads by mtime, with an `ENGINE`
-> column identifying `claude` vs `codex`; in detail mode a Claude sid prefix
-> or Codex thread-id prefix opens the matching transcript / rollout and prints
-> the ready-to-paste `tm resume` command.
+> append-only rollout JSONL files under `~/.codex/sessions/YYYY/MM/DD/`.
+> `tm history` is the flag-only session query surface: it merges the forward
+> tm-owned history index, live/killed identity records, Claude transcripts,
+> and Codex rollouts into bounded JSON by default. It filters time by the
+> JSONL-created timestamp when present, exposes mtime only as a fallback,
+> supports `--fields`, and emits a ready `resumeCommand` for rows with enough
+> repo/cwd and engine anchor data.
 > `tm resume <name> [<thread-id>]` starts a fresh per-teammate daemon; with an
 > explicit thread id it calls `thread/resume`, and with no id it asks Codex
 > for the latest cwd-matching thread via `thread/list(limit=1,
@@ -101,13 +102,14 @@ single-purpose; routing, verb code, and process wiring each have their own home.
 | `cli/context.ts` | Production per-invocation wiring: `NativeEnv`, `EngineRegistry`, `ProductionTeammateRouter`, live identity migrators, and `ProductionIdentityStore`. |
 | `shared/verb-args.ts` | Shared teammate-verb argument parsers (`spawn`, `send`, `wait`, `compact`, `resume`) used by the CLI layer and Claude compatibility wrappers. Cross-engine flags such as `--engine` live here, not under `engines/claude/`. |
 | `help.ts` | `HELP_TEXTS`, `OVERVIEW_HELP`, `REMOVED_VERB_MESSAGES` — the user-facing help strings, the single source of truth that `tm <verb> --help` and `tm help <verb>` print. |
-| `verbs.ts` | `TM_VERBS` — the catalog of the 18 `tm` verbs. |
-| `verbs/` | Verb-layer dispatch — `verbs/{ls,states,status,kill,spawn,send,wait,compact,resume,last,ctx,history,mem,reload}.ts` build engine requests, resolve teammate names through `identity/router.ts`, call engine methods, and format discriminated results through `verbs/format.ts`. `verbs/{ask,archive,poll}.ts` are local dispatcher / diagnostic helpers. |
+| `verbs.ts` | `TM_VERBS` — the catalog of the 17 `tm` verbs. |
+| `verbs/` | Verb-layer dispatch — `verbs/{ls,states,status,kill,spawn,send,wait,compact,resume,last,ctx,history,mem,reload}.ts` build engine requests, resolve teammate names through `identity/router.ts`, call engine methods, and format discriminated results through `verbs/format.ts`. `verbs/{ask,poll}.ts` are local dispatcher / diagnostic helpers. |
 | `engines/engine.ts`, `engines/types.ts`, `engines/registry.ts`, `engines/teammate-record.ts` | The `Engine` interface, the shared request/result/value types (decision multi-engine-tui-architecture §"Engine interface" and §"Capabilities"), the invocation-scoped `EngineRegistry`, and the abstract `TeammateRecord` base whose subclasses live under `engines/<kind>/persistence.ts`. |
 | `engines/claude/` | The Claude engine. `claude-engine.ts` implements `Engine`; `persistence.ts` owns the `ClaudeTeammateRecord` extension while path construction is shared through `persistence/paths.ts`. The verb bodies live in `engines/claude/<verb>.ts` and are reached through the verb layer. |
 | `engines/codex/` | The Codex engine. `engine.ts` implements `Engine`; `persistence.ts` owns the base record plus `/tmp/teammate-codex/<name>/` registry-directory builders including `last-turn.json`; `rollout.ts` reads `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` for last replies, token usage, activity fallback, and killed-name explicit resume routing; `history.ts` lists and expands rollout-backed thread ids for `tm history`. Codex-supported verbs use the app-server daemon; unsupported teammate verbs return structured `not-supported` results through the same Engine method surface. |
 | `persistence/atomic-file.ts` | Atomic write primitives (`atomicWrite`, `reserveExclusive`, `readIfPresent`) — every teammate-record write goes through these so a concurrent verb never observes a torn file. |
 | `persistence/identity-store.ts` | The only file that writes / reads `/tmp/teammate-<name>.json` — decision multi-engine-tui-architecture §"TeammateRecord" enforcement. `reserve` is the `O_CREAT \| O_EXCL` spawn-time race winner; `list()` recursively scans `/tmp/teammate*` (including the Codex registry root, since `codex/foo`'s base record lives at `/tmp/teammate-codex/foo.json`) and relies on schema parse + path-segment reconstruction to keep daemon-private files out of the listing. Identity root is overridable via `CLAUDEMUX_IDENTITY_ROOT` for tests. |
+| `persistence/history-index.ts` | Forward-only tm-owned JSONL index for `tm history`. Lifecycle verbs append session and close-status events; the query layer folds them into records. It never reads or imports retired Markdown ledger files. |
 | `persistence/paths.ts` | Shared path builders for the Claude `/tmp/teammate-*` protocol files, `/tmp/claude-idle/*`, `tmuxSessionName`, and `encodeProjectDir` — the TypeScript side of the path-builder discipline ([decision cross-process-cross-platform-invariants](/.agents/decisions/cross-process-cross-platform-invariants.md)). |
 | `persistence/identity-writer.ts` | `ProductionIdentityStore` — the verb-layer-facing `IdentityStore.remove()` seam (`killVerb` uses it after a successful kill). |
 | `identity/name.ts` | `validateTeammateName` — single-segment + nested-name (`flow/flow-1`) validator. Rejects `__` only when the name also contains `/` (the one case where the `/` → `__` tmux encoding would round-trip ambiguously); legacy flat names like `flow__1` remain reachable. |
@@ -147,7 +149,7 @@ place that routes one CLI invocation. The order:
 3. Help pre-scan on the verb's argument list — a `-h`/`--help` before the
    first positional or before `--prompt` prints that verb's help; otherwise
    the scan stops and dispatch proceeds.
-4. Removed verb (`wait-idle`, `wait-quiet`) → the migration message from
+4. Removed verb (`wait-idle`, `wait-quiet`, `archive`) → the migration message from
    `REMOVED_VERB_MESSAGES`, exit 2.
 5. **Engine-routed teammate verbs** — `tm ls`, `tm states`, `tm status`,
    `tm kill`, `tm spawn`, `tm send`, `tm wait`, `tm compact`, `tm resume`,
@@ -157,9 +159,7 @@ place that routes one CLI invocation. The order:
    after any live pre-JSON teammate is migrated, and
    `ProductionIdentityStore` for identity removal) and hand off through
    `verbs/<v>.ts`.
-5b. **Dispatcher-only / diagnostic verbs** — `tm archive` lives in
-   `verbs/archive.ts` and touches only the dispatcher's own ledger files under
-   `~/.claude/projects/<encoded>/memory/`; `tm poll` remains a Claude/tmux
+5b. **Dispatcher-only / diagnostic verbs** — `tm poll` remains a Claude/tmux
    diagnostic; `tm doctor` assembles local health checks; `tm ask` borrows a
    Codex teammate from the pool for a one-off review turn.
 6. Unknown verb → stderr line plus overview, exit 1.
@@ -205,7 +205,7 @@ per scenario at
 [`test/goldens/<verb>/<slug>.json`](/plugins/claudemux/test/goldens). For
 each scenario the harness runs the native handler once and asserts its
 `{code, stdout, stderr}` matches the golden; a mutating verb (`kill`,
-`archive`, `reload`) additionally pins its post-state to a sibling
+`reload`) additionally pins its post-state to a sibling
 `<slug>.fs.json`. tmux is faked — the native verb reaches it through
 `CLAUDEMUX_TMUX` — so the harness needs no real tmux. The wall clock and the
 per-scenario name generator are both deterministic, so goldens are byte-
@@ -220,12 +220,9 @@ UPDATE_GOLDENS=1 npx vitest run test/conformance.test.ts
 
 and review the `git diff` before committing.
 
-Most scenarios are OS-agnostic, but not all: `tm history`'s detail view
-formats a timestamp with platform-flavored helpers, so those scenarios are
-macOS-gated. The `claudemux-core` CI job therefore runs on both Linux and
-macOS — the native verbs themselves still shell out to platform-sensitive
-binaries (`column`, `grep`), and that surface is what the cross-platform
-matrix pins.
+The `claudemux-core` CI job runs on both Linux and macOS because native verbs
+still shell out to platform-sensitive binaries (`column`, `grep`), and that
+surface is what the cross-platform matrix pins.
 
 The hot-path verbs (`spawn`, `send`, `wait`, `compact`, `resume`) cannot run
 their full round-trip under the conformance fake — there is no real `claude`

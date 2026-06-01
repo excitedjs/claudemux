@@ -22,11 +22,8 @@ import { die } from './errors'
  * `--prompt` value or the first non-flag positional stops it (help
  * text must not swallow prompt data that happens to contain `--help`).
  *
- * Exported because `main.ts` needs it too: a verb that reads stdin
- * (only `archive`) must not slurp stdin when the invocation is going
- * to print help, since the help dispatch never reaches the reader and
- * a pipe held open by an upstream producer would block the launcher
- * forever.
+ * Exported because `main.ts` needs the same scan before it decides
+ * whether a prompt-like value is ordinary data or a request for help.
  */
 export function triggersHelp(args: readonly string[]): boolean {
   for (const arg of args) {
@@ -117,21 +114,22 @@ export function resolveRemoteControl(
 export function resolveRepoPath(
   rawPath: string,
   env: NativeEnv,
+  label = 'tm spawn',
 ): { repo: string } | { error: TmResult } {
   if (rawPath.length === 0) {
-    return { error: die('tm spawn: <path> is required') }
+    return { error: die(`${label}: <path> is required`) }
   }
   const absolute = isAbsolute(rawPath) ? rawPath : resolve(env.dispatcherDir, rawPath)
   if (!existsSync(absolute)) {
     return {
       error: die(
-        `tm spawn: <path> '${rawPath}' does not exist (resolved to ${absolute})`,
+        `${label}: <path> '${rawPath}' does not exist (resolved to ${absolute})`,
       ),
     }
   }
   if (!isDirectory(absolute)) {
     return {
-      error: die(`tm spawn: <path> '${rawPath}' is not a directory (resolved to ${absolute})`),
+      error: die(`${label}: <path> '${rawPath}' is not a directory (resolved to ${absolute})`),
     }
   }
   return { repo: realpathSync(absolute) }
@@ -200,7 +198,7 @@ function normalizeExistingCwd(cwd: string): string {
  *
  *  1. the live identity record (running or just-spawned teammate);
  *  2. the archived identity record written at `tm kill` time — so a
- *     post-kill `tm resume <name> <sid>` or `tm history <name>` lands
+ *     post-kill `tm resume <name> <sid>` or `tm history --name <name>` lands
  *     on the worktree-encoded project-dir slug rather than the
  *     dispatcher's slug;
  *  3. the Codex registry's cwd hint (Codex daemon meta + base record);

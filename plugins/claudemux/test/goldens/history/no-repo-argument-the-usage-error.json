@@ -1,5 +1,0 @@
-{
-  "code": 1,
-  "stdout": "",
-  "stderr": "tm: usage: tm history <name> [<sid-or-thread-prefix>]\n"
-}

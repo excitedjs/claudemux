@@ -120,8 +120,9 @@ export async function claudeResume(args: readonly string[], env: ClaudeVerbEnv):
     if (looksLikeUuidPrefix(sid)) {
       return die(
         `received '${sid}', looks like a sid prefix; resume requires the ` +
-          `full sid. Run 'tm history ${name} ${sid}' to expand it, or ` +
-          `'tm history ${name}' to list past sessions with full ids.`,
+          `full sid at the engine layer. Run 'tm history --repo ${repo} --id ${sid}' ` +
+          `to expand it, or call the top-level 'tm resume --repo ${repo} ` +
+          `--id ${sid} --engine claude' form so tm can expand an unambiguous prefix.`,
       )
     }
     return die(
@@ -133,7 +134,9 @@ export async function claudeResume(args: readonly string[], env: ClaudeVerbEnv):
     if (looksLikeUuidPrefix(sid)) {
       return die(
         `received '${sid}', looks like a sid prefix; resume requires the ` +
-          `full sid. Run 'tm history ${name} ${sid}' to expand it.`,
+          `full sid at the engine layer. Run 'tm history --repo ${repo} --id ${sid}' ` +
+          `to expand it, or call the top-level 'tm resume --repo ${repo} ` +
+          `--id ${sid} --engine claude' form so tm can expand an unambiguous prefix.`,
       )
     }
     return die(`sid is not a valid uuid: ${sid}`)

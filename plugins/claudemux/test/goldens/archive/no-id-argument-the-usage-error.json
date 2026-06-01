@@ -1,5 +1,0 @@
-{
-  "code": 1,
-  "stdout": "",
-  "stderr": "tm: usage: tm archive <id> [--status '<tag>']   (outcome text on stdin)\n"
-}

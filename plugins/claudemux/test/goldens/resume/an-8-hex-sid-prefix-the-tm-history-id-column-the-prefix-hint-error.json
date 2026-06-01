@@ -1,5 +1,5 @@
 {
   "code": 1,
   "stdout": "",
-  "stderr": "tm: received 'fa48af8f', looks like a sid prefix; resume requires the full sid. Run 'tm history claudemux-conftest-3d6e2a337125 fa48af8f' to expand it, or 'tm history claudemux-conftest-3d6e2a337125' to list past sessions with full ids.\n"
+  "stderr": "tm: received 'fa48af8f', looks like a sid prefix; resume requires the full sid at the engine layer. Run 'tm history --repo <SCRATCH>/dispatcher/claudemux-conftest-3d6e2a337125 --id fa48af8f' to expand it, or call the top-level 'tm resume --repo <SCRATCH>/dispatcher/claudemux-conftest-3d6e2a337125 --id fa48af8f --engine claude' form so tm can expand an unambiguous prefix.\n"
 }

@@ -15,7 +15,7 @@ The dispatcher dir is resolved as `${TM_DISPATCHER_DIR:-$PWD}` (see SKILL.md `tm
 | Existing persistent Codex daemon teammate, send a new task | `tm send <name> --prompt "..."` |
 | One-shot Codex pool turn on a fresh ephemeral thread | `tm ask "..."` |
 
-Run `tm spawn --help`, `tm send --help`, and `tm ask --help` for flags, accepted arguments, exit codes, and exact stdout/stderr contracts. This file explains operational semantics, path resolution, scenario selection, and surrounding mechanics. Keep it synchronized with live help.
+For work you may need to recover later, add `--intent "short subject"` to `tm spawn`; it is persisted as the queryable `intent` field in `tm history` and reused as the teammate display name. Run `tm spawn --help`, `tm send --help`, and `tm ask --help` for flags, accepted arguments, exit codes, and exact stdout/stderr contracts. This file explains operational semantics, path resolution, scenario selection, and surrounding mechanics. Keep it synchronized with live help.
 
 ## Composing the spawn / send prompt
 
@@ -64,12 +64,12 @@ Read stderr before deciding the next step; timeout paths name the recovery verb 
 
 - For reload fan-out across teammates, use `tm reload --all` or `tm reload <name>...`.
 - For externally driven Claude turns (Remote Control web UI, mobile, the teammate's own sub-agents), collect the next reply with `tm wait <name> --fresh`; for Codex daemon turns, use `tm wait <name>`.
-- For stopping a teammate, use `tm kill <name>`; it clears the matching on-disk state for that engine.
+- For stopping a teammate, use `tm kill <name>`; it clears the matching on-disk state for that engine. When the work reached a terminal state, record it at the same boundary with `tm kill <name> --status <merged|done|shelved|abandoned|blocked> [--note <text>]`.
 
 ## Dispatcher-facing details on Claude spawn
 
 - **Remote Control opt-in.** Remote Control (claude.ai/code web + mobile) is per-teammate and off by default. Enable it for a spawn with `tm spawn <repo> --remote-control` when the user asks for it in natural language — "用 RC 模式派一个 xxx 任务", "这个功能开发要 remote-control 模式", "I want to drive this one from my phone". `--no-remote-control` forces it off. To default every teammate to RC, set `CLAUDEMUX_REMOTE_CONTROL=1` in the dispatcher's `.claude/settings.json` env block; a per-spawn flag still overrides it (precedence: explicit flag > config > off). This is the per-teammate alternative to the user-global `remoteControlAtStartup`, which would also turn RC on for the dispatcher and every unrelated `claude` session. RC is Claude-only; an explicit `--remote-control` is rejected with `--engine codex`.
-- **Remote Control URL.** When RC is enabled, the teammate's startup banner prints its Remote Control URL; read it from `tm status <name>` and record it in the ledger at spawn time so the user has a direct channel to that teammate.
+- **Remote Control URL.** When RC is enabled, the teammate's startup banner prints its Remote Control URL; read it from `tm status <name>` and surface it in the user-facing status report so the user has a direct channel to that teammate.
 
 ## Persistent Codex daemon teammates
 
@@ -107,8 +107,8 @@ Preconditions and failures:
 
 ## Resuming a prior task
 
-If the user wants to continue a task whose teammate has died (dispatcher restarted, `tm kill`, Mac reboot), use `tm resume <name> <sid-or-thread-id>` with the id pulled from the active ledger or `tm history <name>`. See `inspect-and-resume.md`.
+If the user wants to continue a task whose teammate has died (dispatcher restarted, `tm kill`, host reboot), query `tm history --repo <path>` or `tm history --id <prefix>` and use the row's `resumeCommand`. See `inspect-and-resume.md`.
 
-## Recording the task in the ledger
+## Recording recoverable context
 
-Every spawn that produces work worth tracking should append an entry to `active-dispatcher-tasks.md` at spawn time: sid/thread id when available, branch, intent, and artifacts you expect to fill later. Schema and entry shape live in `ledger-and-archive.md`. Skip this only for truly throwaway one-shot calls such as `tm ask` or a one-line "what's your branch?" probe.
+Do not write a manual dispatcher ledger. For work worth tracking, put the short subject in `tm spawn --intent "..."`, let tm record repo/session metadata, and keep durable outcomes in the issue, PR, tracker, or repo artifact the teammate is already working on. Close status lives in `tm kill --status`; free-form outcome text is intentionally not a query index.

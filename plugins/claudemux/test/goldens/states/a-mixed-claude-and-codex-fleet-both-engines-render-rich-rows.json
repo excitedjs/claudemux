@@ -1,5 +1,5 @@
 {
   "code": 0,
-  "stdout": "NAME                             REPO            WORKTREE  ENGINE  STATE    LAST     PREVIEW\nclaudemux-conftest-852e127d0669  -               -         claude  unknown  22B/2h   claude row stays rich\ncodex-197a8ede                   codex-197a8ede  -         codex   busy     20B/42s  codex row stays rich\n",
+  "stdout": "NAME                             REPO            WORKTREE  ENGINE  STATE     LAST     PREVIEW\nclaudemux-conftest-852e127d0669  -               -         claude  unknown   22B/2h   claude row stays rich\ncodex-197a8ede                   codex-197a8ede  -         codex   borrowed  20B/42s  codex row stays rich\n",
   "stderr": ""
 }

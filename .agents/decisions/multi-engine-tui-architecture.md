@@ -429,8 +429,9 @@ Codex engine, not in the architecture decision.
 
 `tm history`, `tm last`, `tm mem`, `tm reload`, `tm ctx`, `tm compact`,
 `tm resume`, `tm ls`, `tm states`, `tm spawn`, `tm send`, `tm wait`,
-`tm kill`, `tm doctor`, `tm archive`, `tm ask` all stay verbs in the
-public CLI. None is removed by this reshape.
+`tm kill`, `tm doctor`, `tm ask` all stay verbs in the public CLI. `tm archive`
+has since been removed with the manual dispatcher Markdown ledger; close
+metadata is recorded through `tm kill --status`.
 
 `tm history` is useful enough that it lives on. The Claude engine reads
 `~/.claude/projects/<encoded>/` and lists transcript sid values. The
@@ -643,7 +644,6 @@ plugins/claudemux/src/
     reload.ts                               parse, resolve engine, fan out reload
     ls.ts                                   default impl: aggregate all Engine.list rows
     states.ts                               default impl: aggregate Engine.status snapshots (rich)
-    archive.ts                              dispatcher task-archive verb (no engine)
     doctor.ts                               global checks + per-engine doctor section
     status.ts                               default impl: resolve name, route to Engine.status
     poll.ts                                 diagnostic pattern wait

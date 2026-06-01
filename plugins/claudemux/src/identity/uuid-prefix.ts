@@ -11,7 +11,7 @@
  * (positions 8, 13, 18, 23), and the input is strictly shorter than the
  * 36-char canonical form. That matches the inputs `tm history`'s detail
  * mode actually accepts (it does `startsWith` against canonical dashed
- * ids), so the hint we emit — "Run 'tm history <repo> <input>'" — is
+ * ids), so callers can emit a "Run 'tm history --id <input>'" hint that is
  * always actionable.
  *
  * Notably rejected: the no-dash 32-hex form (history's startsWith would

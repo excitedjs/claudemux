@@ -1,11 +1,11 @@
 ---
 name: dispatcher
-description: Manage dispatcher-style coordination across sibling git repos from a parent workspace. Use when the user asks to spawn, dispatch, message, resume, inspect, compact, or kill Claude/Codex teammates; run one-shot Codex pool work with tm ask; coordinate work across sibling repos; check teammate state; or maintain the dispatcher task ledger. Also use when the user names dispatcher concepts such as "send out a teammate / spin up a teammate / dispatch a task / check what X is doing / multi-repo / dispatcher".
+description: Manage dispatcher-style coordination across sibling git repos from a parent workspace. Use when the user asks to spawn, dispatch, message, resume, inspect, compact, or kill Claude/Codex teammates; run one-shot Codex pool work with tm ask; coordinate work across sibling repos; check teammate state; or query teammate history. Also use when the user names dispatcher concepts such as "send out a teammate / spin up a teammate / dispatch a task / check what X is doing / multi-repo / dispatcher".
 ---
 
 # Dispatcher: multi-repo teammate orchestrator
 
-Operations manual for dispatcher-style work from a parent directory of sibling git repos. The dispatcher routes target-repo work to repo-local Claude or Codex execution, waits, reads back, updates the task ledger, and reports the result. Detailed per-scenario operational steps live in `references/<scenario>.md`.
+Operations manual for dispatcher-style work from a parent directory of sibling git repos. The dispatcher routes target-repo work to repo-local Claude or Codex execution, waits, reads back, uses `tm history` for session lookup, and reports the result. Detailed per-scenario operational steps live in `references/<scenario>.md`.
 
 > **`tm` is the helper script** bundled with this plugin. Examples below call it as bare `tm`. Claude Code auto-prepends each installed plugin's `bin/` directory to `PATH`, so `which tm` resolves inside any Bash subshell of an interactive Claude Code session. If `tm` is not on `PATH`, use the absolute install path: `~/.claude/plugins/cache/claudemux/claudemux/<version>/bin/tm`. **Do not** rely on `${CLAUDE_PLUGIN_ROOT}` from a generic Bash tool call; that variable is injected only when the harness runs plugin-defined commands, hooks, or skill bodies.
 
@@ -15,7 +15,7 @@ Operations manual for dispatcher-style work from a parent directory of sibling g
 
 - The user asks to push work into another repo ("派一个到 `<repo>`", "去 `<repo>` 看看 X").
 - The user asks about an existing teammate ("看看 alarm 在干啥", "问问 monorepo-1 现在的 git status").
-- The user asks to coordinate across multiple sibling repos or maintain the dispatcher task ledger.
+- The user asks to coordinate across multiple sibling repos or find prior teammate sessions.
 
 If the request is a normal single-repo or single-file task inside a covered sibling repo, resolve the target repo and delegate the work into that repo. Keep repo-local instructions, git state, and tool output inside the worker context instead of mixing them into the dispatcher.
 
@@ -24,21 +24,21 @@ If the request is a normal single-repo or single-file task inside a covered sibl
 The dispatcher routes work into sibling repos; it does not investigate target-repo code itself. Two corollaries that show up often:
 
 - **Hand the symptom to the teammate, not pre-digested conclusions.** When a sibling-repo symptom shows up, spawn the teammate and pass the symptom. Skip `git -C <repo> diff/log`, `grep` inside the sibling repo, and `Read` on sibling files done "to understand the bug first". The teammate has the repo's own context and `CLAUDE.md`; pre-investigation wastes dispatcher context and anchors the teammate to whatever conclusion you already drew before delegating.
-- **Expect the user to drive teammates directly.** Remote Control web UI, mobile, and claude.ai/code give the user a private channel to each Claude tmux teammate; many interactions never pass through `tm send`. Remote Control is per-teammate opt-in (`tm spawn --remote-control`, or the `CLAUDEMUX_REMOTE_CONTROL` config default — see `references/dispatch-task.md`); when it is enabled, surface the teammate's Remote Control URL in the ledger at spawn time and do not reflexively offer to relay user messages through the dispatcher. The teammate's own recap is the source of truth for what happened in that channel, even when the dispatcher was not the prompt source.
+- **Expect the user to drive teammates directly.** Remote Control web UI, mobile, and claude.ai/code give the user a private channel to each Claude tmux teammate; many interactions never pass through `tm send`. Remote Control is per-teammate opt-in (`tm spawn --remote-control`, or the `CLAUDEMUX_REMOTE_CONTROL` config default — see `references/dispatch-task.md`); when it is enabled, surface the teammate's Remote Control URL in the user-facing status report and do not reflexively offer to relay user messages through the dispatcher. The teammate's own recap is the source of truth for what happened in that channel, even when the dispatcher was not the prompt source.
 - **A teammate citing instructions the dispatcher never saw is the expected case.** See `references/wait-and-readback.md` §"A reply may cite instructions you never saw" for the handling rule — default reading is "user spoke directly", not "teammate fabricated".
-- **`.workspace/artifacts/` is the dispatcher's own scratch space.** When you need to park a triage table, research dump, design draft, or any intermediate output that should survive a reboot, write `<dispatcher-dir>/.workspace/artifacts/<YYYYMMDD>-<slug>.md` instead of `/tmp/<topic>.md`. The task ledger stays in AutoMemory (see `references/ledger-and-archive.md`) — `.workspace/` does not mirror or replace it. Don't direct teammates to write into the dispatcher's `.workspace/`; their work belongs in their own repo or `/tmp/`. Layout: `.workspace/imports.md` (auto-loaded into your context via `CLAUDE.md`) and `.workspace/README.md`.
+- **`.workspace/artifacts/` is the dispatcher's own scratch space.** When you need to park a triage table, research dump, design draft, or any intermediate output that should survive a reboot, write `<dispatcher-dir>/.workspace/artifacts/<YYYYMMDD>-<slug>.md` instead of `/tmp/<topic>.md`. `tm history` owns teammate session lookup; `.workspace/` is for dispatcher-authored artifacts, not a mirror of teammate state. Don't direct teammates to write into the dispatcher's `.workspace/`; their work belongs in their own repo or `/tmp/`. Layout: `.workspace/imports.md` (auto-loaded into your context via `CLAUDE.md`) and `.workspace/README.md`.
 
 ## The `tm` script
 
 `tm` resolves the dispatcher directory from `TM_DISPATCHER_DIR` if set, otherwise `$PWD`. `/claudemux:setup` writes `TM_DISPATCHER_DIR` into the dispatcher root's `.claude/settings.json` so Claude Code injects it on dispatcher launch. If `tm doctor` reports `TM_DISPATCHER_DIR: unset` or points at the wrong directory, run `/claudemux:setup` from the dispatcher root or ask the user to relaunch there.
 
-`tm spawn <path>` is the only verb that takes a filesystem path; every other teammate verb takes the flat `<name>` returned by spawn. The path may be absolute or relative to the dispatcher dir; `realpath` resolves it and `identity.repo` records the result. The teammate name is auto-generated as `<basename(path)>-<rand4>` unless you pass `--name <id>` (`^[A-Za-z0-9][A-Za-z0-9_-]*$`, globally unique). Spawn returns `spawned: <name>` on stderr — **capture it and record it in the active-task ledger**; every subsequent `tm send` / `tm wait` / `tm kill` / `tm last` / `tm mem` routes by name, not by path.
+`tm spawn <path>` is the only common lifecycle verb that takes a filesystem path; most follow-up verbs take the flat `<name>` returned by spawn, while history recovery can also use `tm resume --engine <e> --repo <path> --id <id>`. The path may be absolute or relative to the dispatcher dir; `realpath` resolves it and `identity.repo` records the result. The teammate name is auto-generated as `<basename(path)>-<rand4>` unless you pass `--name <id>` (`^[A-Za-z0-9][A-Za-z0-9_-]*$`, globally unique). Spawn returns `spawned: <name>` on stderr. Pass `--intent "short subject"` for work worth finding later; tm records it as the queryable `intent` field in `tm history`. Every subsequent `tm send` / `tm wait` / `tm kill` / `tm last` / `tm mem` routes by name, not by path.
 
 By default a Claude teammate runs inside a worktree at `<path>/.claude/worktrees/<name>/` (branch `worktree-<name>`, base ref `HEAD`); pass `--no-worktree` for repo-wide tasks where worktree isolation is a hindrance. Codex teammates default to a self-managed git worktree at the same `.claude/worktrees/<name>/` layout (claudemux drives `git worktree add` directly because Codex has no native worktree flag). Codex teammates are daemons, not tmux sessions; spawn them explicitly with `tm spawn <path> --engine codex`. Names are flat — nested `codex/foo` form is no longer supported.
 
 ## Scenario routing
 
-Match the user's intent to one row below, then **read the listed reference before reaching for the verb** — it covers scenario flow and edge cases. The dispatcher orchestrates teammates exclusively through `tm`; Agent Teams and raw `claude -p` are intentionally not surfaced as dispatcher delegation forms, so every teammate shares the same ledger, identity record, and state tracking.
+Match the user's intent to one row below, then **read the listed reference before reaching for the verb** — it covers scenario flow and edge cases. The dispatcher orchestrates teammates exclusively through `tm`; Agent Teams and raw `claude -p` are intentionally not surfaced as dispatcher delegation forms, so every teammate shares the same history index, identity record, and state tracking.
 
 | When you're doing this | Read | Primary verb(s) |
 |---|---|---|
@@ -49,9 +49,8 @@ Match the user's intent to one row below, then **read the listed reference befor
 | Waiting for a turn an external actor drove | `references/wait-and-readback.md` | `tm wait <name> --fresh` / `tm wait <name>` |
 | Reading the fleet snapshot | `references/inspect-and-resume.md` | `tm states` |
 | A teammate looks hung mid-turn and needs pane/process ground truth | `references/wait-and-readback.md` | `tm status <name>` |
-| Looking up past sessions or threads / resuming / re-reading a reply | `references/inspect-and-resume.md` | `tm history <name>` / `tm resume <name> <id>` / `tm last <name>` |
+| Looking up past sessions or threads / resuming / re-reading a reply | `references/inspect-and-resume.md` | `tm history --repo <path>` / `tm resume --engine <e> --repo <path> --id <id>` / `tm last <name>` |
 | Compacting a Claude teammate's context window | `references/compact-a-teammate.md` | `tm compact <name>` |
-| Appending a new active task or archiving a finished one | `references/ledger-and-archive.md` | `tm archive <id>` |
 | Diagnosing `.sid` drift, a stuck Claude spawn, or surprising `tm states` output | `references/sid-rotation.md` | (debugging) |
 | Fanning `/reload-plugins` to teammates after a plugin update | (no reference) | `tm reload --all` (or `tm reload <name>...`) |
 
@@ -71,7 +70,7 @@ This pairs with the `run_in_background: true` mechanics in the next section (tha
 
 Run every verb that may block longer than a couple of seconds with `run_in_background: true` on the Bash tool. This covers `tm send` (sync default, blocks until Stop), `tm wait`, `tm spawn --prompt`, `tm resume --prompt`, `tm compact` (default 1800 s cap), `tm poll`, `tm reload`, and any file-polling loop you write yourself. After the call is backgrounded, wait for the task notification; do not chain `sleep N && cat <output-file>` to peek at the background output file.
 
-Foreground waits block the dispatcher end-to-end, so keep foreground use to non-wait operations such as `tm ls`, `tm states`, `tm status`, `tm last`, `tm history`, `tm archive`, `tm kill`, `tm doctor`, `tm resume` without `--prompt`, and `tm spawn` without `--prompt` when you intentionally want launch readiness before continuing.
+Foreground waits block the dispatcher end-to-end, so keep foreground use to non-wait operations such as `tm ls`, `tm states`, `tm status`, `tm last`, `tm history`, `tm kill`, `tm doctor`, `tm resume` without `--prompt`, and `tm spawn` without `--prompt` when you intentionally want launch readiness before continuing.
 
 The harness sandbox blocks `sleep` calls longer than a few seconds. To wait for an external condition (a file appearing, a process exiting, a status flipping), run a bounded polling loop in the background: `until <check>; do sleep 4; done` wrapped in `run_in_background: true`. The sandbox doesn't object to many short sleeps; it objects to one long one.
 
@@ -84,9 +83,6 @@ A reply to the user that asserts an outcome must be verifiable from this turn's 
 - **Send the "done" reply after the action's tool call returns, not in the same parallel batch.** The auto-mode classifier reads the transcript top-to-bottom; a reply that asserts completion alongside the action looks like a fabricated completion report and can be blocked. Independent calls can still batch — this only constrains an action and the reply that asserts it finished.
 - **Run `date` before writing time-sensitive framing.** The session context carries the date but never the time of day, and a past "I'm going to sleep" in the summary says nothing about the present moment. Without checking the clock, phrases like "good morning", "it's late", or "unattended overnight" can be confidently wrong.
 
-## Task ledger boot-up
+## History lookup
 
-Two files in this dispatcher's Claude Code memory directory (`~/.claude/projects/<encoded-cwd>/memory/`) power the task ledger; file purposes, schema, and the `tm archive` flow live in `references/ledger-and-archive.md`. The boot rule is:
-
-- **Read on boot**: `active-dispatcher-tasks.md` — before any cross-task decision, and whenever the user asks "what's running" / "看看现在在跑啥".
-- **Never read on boot**: `dispatcher-tasks-archive.md` — on demand only, when the user asks about a past task or you need history to make a decision.
+Do not maintain or read a manual dispatcher Markdown ledger. Use `tm states` for the live fleet and `tm history` for past or in-flight teammate sessions. `tm history` defaults to bounded JSON for agent consumption; use `--fields` to keep large scans small, and follow each row's `resumeCommand` when continuing an orphaned session. When closing work, attach queryable status with `tm kill <name> --status <merged|done|shelved|abandoned|blocked> [--note <text>]`.

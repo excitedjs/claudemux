@@ -2,7 +2,7 @@
 
 Read this whenever you are about to compose a `tm spawn` / `tm send --prompt` whose text quotes sibling-repo state — feature-gate names, branch names, in-progress projects, "the owner of the X refactor". The dispatcher's own auto-memory does NOT include sibling repo memories, so a remembered-feeling fact may have been read from a stale snapshot or never recorded at all. Pull the index from the right sibling first.
 
-Skip this when you are answering the user from dispatcher context only (e.g. "what teammates are running") or routing them to an already-live teammate without injecting sibling state into a new prompt — `tm states` and the ledger are enough there.
+Skip this when you are answering the user from dispatcher context only (e.g. "what teammates are running") or routing them to an already-live teammate without injecting sibling state into a new prompt — `tm states` and `tm history` are enough there.
 
 ## The verb: `tm mem`
 
@@ -16,7 +16,7 @@ Run `tm mem --help` for the full contract.
 |---|---|
 | About to write `tm spawn <path> --prompt "..."` that names a feature gate, branch, owner, or in-progress project in `<path>` | Yes — before composing the prompt |
 | About to write `tm send <name> --prompt "..."` that references sibling state | Yes — same reason |
-| Answering the user from dispatcher context only | No — `tm states` / ledger suffice |
+| Answering the user from dispatcher context only | No — `tm states` / `tm history` suffice |
 | Routing to an already-running teammate without quoting sibling state | No |
 
 The trigger is "I am about to inject a fact about repo X into a teammate's prompt." The teammate has no original context to judge whether the fact is fresh — that is why the verification step has to happen here, before the prompt is sent.
@@ -27,7 +27,7 @@ Memory entries can be stale. A feature-gate name may have been renamed, a branch
 
 - Branch name → `git -C <dispatcher-dir>/<repo> branch --show-current` (or `git -C ... ls-remote` for upstream)
 - Feature-gate / config name → grep the actual sibling repo
-- "Current owner / in-progress project" → check the dispatcher ledger or recent git log
+- "Current owner / in-progress project" → check `tm history --repo <repo> --fields intent,state,closeStatus,lastAssistantPreview` or recent git log
 
 This is the same verify-before-recommend rule that applies to the dispatcher's own memory.
 

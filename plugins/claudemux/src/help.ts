@@ -35,17 +35,20 @@ USAGE  (most common first)
   tm wait <name> [--fresh]               wait for next Stop; print reply
   tm compact <name>                      /compact + verify, prints "compacted"
   tm resume <name> [<sid/thread-id>]     resume a prior conversation
+  tm resume --engine <e> --repo <path> --id <sid/thread-id>
+                                         resume an orphaned history row under a
+                                         fresh teammate name
   tm last <name> [--verbose]             reprint last reply; Codex raw turn with --verbose
-  tm kill <name>                         graceful /exit (clean worktree auto-removed);
+  tm kill <name> [--status <s>] [--note <text>]
+                                         graceful /exit (clean worktree auto-removed);
                                          dirty worktree preserved with stderr note
   tm reload <name>... | --all            fan out /reload-plugins
   tm ls [--all]                          list teammates (NAME REPO WORKTREE ENGINE STATE);
                                          --all also lists killed teammates (resumable by name)
   tm states [--all]                      rich fleet snapshot; --all includes killed teammates
   tm ctx <name>... | --all               real ctx-window usage from jsonl
-  tm history <name> [<sid/thread-prefix>] inspect past sessions for this teammate
+  tm history [--repo <path>] [--id <id>] query past and live teammate sessions
   tm mem <name>                          cat the parent repo's auto-memory index
-  tm archive <id>                        move finished task active→archive (stdin)
   tm ask "<prompt>"                      one-shot turn on an idle codex teammate (pool)
 
 DIAGNOSTIC (escape hatches — prefer the verbs above)
@@ -84,9 +87,13 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
 
       List teammates, one row each: NAME, REPO (last path segment),
       WORKTREE (slug or '-'), ENGINE (claude / codex), STATE (idle /
-      busy / unknown). The live fleet comes from each engine's session
+      busy / borrowed / unknown). The live fleet comes from each engine's session
       listing. For a richer "who's doing what" view, prefer
       \`tm states\`.
+
+      A Codex teammate that is lending its daemon to a one-shot
+      \`tm ask\` / direct turn reports STATE 'borrowed'; it is live,
+      but not idle for another borrowed turn.
 
       --all also lists killed teammates — the identity snapshots
       \`tm kill\` archives under /tmp/teammate-archive/<name>.json —
@@ -104,12 +111,16 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       rollout JSONL. Use to see what every teammate is doing at a
       glance.
 
+      STATE reuses the same vocabulary as \`tm history --state\`:
+      idle, busy, borrowed, killed, orphaned, unknown. A borrowed
+      Codex daemon is live but temporarily held by a one-shot turn.
+
       --all also lists killed teammates (STATE 'killed') from the
       kill-time identity archive, same as \`tm ls --all\`; their LAST /
       PREVIEW render as '-' because the live markers are gone. Recover
       one with \`tm resume <name>\`.
 `,
-  spawn: `tm spawn <path> [--name <id>] [--engine claude|codex] [--prompt "..."] [--no-worktree] [--remote-control] [--timeout N]
+  spawn: `tm spawn <path> [--name <id>] [--intent "..."] [--engine claude|codex] [--prompt "..."] [--no-worktree] [--remote-control] [--timeout N]
 
       Launch a teammate in <path>. <path> is positional; it may be
       absolute, or relative to the dispatcher dir
@@ -128,6 +139,13 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
           \`<path-leaf>-<rand4>\`. The leaf is derived from
           \`basename(realpath(<path>))\`; rand4 ensures multiple
           teammates can target the same repo without collision.
+
+      \`--intent "..."\` records a short git-subject-style task
+      subject on the existing display-name rail. \`tm history\`
+      exposes it as the queryable \`intent\` field and searches it
+      through \`--grep\`. Keep it concise; durable outcomes belong in
+      the issue, PR, or external tracker, with only close status and a
+      bounded note kept in tm metadata.
 
       Default behaviour creates a git worktree at
       \`<path>/.claude/worktrees/<name>/\` and runs the teammate
@@ -282,9 +300,16 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
             still alive" semantics as 'tm send'.
 `,
   resume: `tm resume <name> [<sid-or-thread-id>] [--prompt "..."] [--engine claude|codex]
+tm resume --engine <claude|codex> --repo <path> --id <sid-or-thread-id> [--name <fresh>] [--intent "..."] [--prompt "..."]
 
       Resume a prior conversation. <name> is the flat teammate
       identifier from a previous spawn — never a path.
+      The id-addressed form resumes a row from \`tm history\`, including
+      orphaned rows with no live or killed teammate name. \`--repo\`
+      anchors the cwd/project directory; omit \`--name\` and tm mints a
+      fresh \`<repo-leaf>-<rand4>\` handle. \`--id\` accepts a full id
+      or an unambiguous prefix and rejects ambiguous prefixes with the
+      candidate full ids.
       Claude teammates use a transcript sid: passing <sid> validates
       that transcript and launches 'claude --resume <sid>'. Without
       sid, Claude's native 'claude --continue' chooses the latest
@@ -354,7 +379,8 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       to inject into a teammate's prompt against current code or
       git state before sending.
 `,
-  kill: `tm kill <name>
+  kill: `tm kill <name> [--status <merged|done|shelved|abandoned|blocked>] [--note <text>]
+tm kill --id <full-or-prefix> --status <merged|done|shelved|abandoned|blocked> [--note <text>]
 
       Graceful teammate shutdown. For a Claude teammate the verb
       sends \`/exit\` to the REPL and waits up to 15s for the
@@ -381,6 +407,12 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       The identity JSON, \`.sid\` / \`.cwd\` / \`.ready\` / \`.send-at\`
       marker files, and idle / busy / .last markers are cleared on
       every exit path (clean, dirty, forced).
+
+      \`--status\` writes queryable close metadata for \`tm history
+      --status ...\`. Use \`--note\` for a bounded human-readable close
+      note; note text is inspectable metadata, not a query index. The
+      id-addressed form records close metadata for a session that died
+      without a clean \`tm kill <name>\`; it does not stop a process.
 `,
   ask: `tm ask "<prompt>"
 
@@ -418,31 +450,44 @@ export const HELP_TEXTS: Readonly<Record<string, string>> = {
       proves a 1M window; otherwise 200k is assumed (labelled
       accordingly). --window forces the assumption.
 `,
-  history: `tm history <name> [<sid-or-thread-prefix>]
+  history: `tm history [--repo <leaf|path>] [--name <glob>] [--id <full-or-prefix>] [--engine claude|codex] [--since <time>] [--until <time>] [--state <state>] [--status <status>] [--grep <text>] [--limit N] [--cursor N] [--fields a,b,c] [--json|--oneline|--table]
 
-      Inspect this repo's past Claude sessions and Codex threads
-      (live or dead). No id: list mode, newest-first table merged by
-      transcript / rollout mtime. The ENGINE column identifies
-      claude vs codex; ID is the full Claude sid (UUIDv4) or Codex
-      thread id (UUIDv7) recorded in a rollout filename — the same
-      string 'tm resume' accepts. '*' marks the current live
-      teammate's session / thread. With a sid, thread id, or prefix:
-      detail mode (full id, transcript / rollout path, size / line
-      count, created time, ctx usage when present, first prompt,
-      last assistant text up to 1500 chars, ready-to-paste
-      'tm resume' command). Boundary vs 'tm last': last covers only
-      the current live teammate's reply; history covers any jsonl on
-      disk including killed sessions.
-`,
-  archive: `tm archive <id> [--status '<tag>']
+      Query past and live teammate sessions. The grammar is flag-only:
+      legacy \`tm history <name>\` and \`tm history <name> <id>\` are
+      removed. Default output is bounded JSON for dispatcher agents:
+      { "items": [...], "nextCursor": "N" | null }. Use \`--limit\`
+      and \`--cursor\` to page; unbounded blob reads are not part of
+      the contract. \`--oneline\` and \`--table\` are opt-in views for
+      humans.
 
-      Move a finished task from the active ledger to the archive.
-      Reads the compressed one/two-line outcome on stdin; copies
-      repo/branch/intent verbatim from the active entry and stamps
-      today's date. Prepends to dispatcher-tasks-archive.md (newest
-      on top), creating it from its shape if absent, then deletes
-      the entry from active-dispatcher-tasks.md. --status overrides
-      the carried-over [status] tag.
+      Stable JSON fields: id, engine, name, repo, cwd, worktreeSlug,
+      branch, baseRef, createdAt, createdAtSource, lastSeenAt, state,
+      intent, closeStatus, closeNotePreview, lastAssistantPreview,
+      resumeCommand, source, topic, path, sizeBytes. \`--fields\`
+      accepts a comma-separated subset and errors with this valid list
+      when a field is empty or unknown.
+
+      Sources are merged into one newest-first view. The forward
+      tm-owned history index is the attribution spine for future
+      sessions; Claude transcripts and Codex rollouts enrich rows and
+      recover pre-index sessions. The index starts empty and never reads
+      or imports retired Markdown ledger files.
+
+      Time filters use the in-file session-created timestamp for
+      transcripts/rollouts. When a source lacks that timestamp,
+      \`createdAtSource: "mtime"\` exposes the mtime fallback. \`--name\`
+      is an attribution filter only: it matches indexed, live, and
+      last-killed records; robust recovery should prefer repo/id/time.
+
+      STATE values: live, idle, busy, borrowed, killed, orphaned,
+      unknown. Close status values: merged, done, shelved, abandoned,
+      blocked. \`intent\` is queryable through \`--grep\`; free-form
+      outcome is not queryable and lives in external artifacts plus the
+      bounded preview/note fields.
+
+      Every row with enough anchor data includes \`resumeCommand\`, for
+      example:
+        tm resume --engine claude --repo '/path/to/repo' --id '<sid>'
 `,
   status: `tm status <name> [lines=80]
 
@@ -494,5 +539,7 @@ export const REMOVED_VERB_MESSAGES: Readonly<Record<string, string>> = {
   'wait-idle': `tm wait-idle was renamed to 'tm wait' in 0.3.0. Same semantics; the new verb also prints .last on stdout by default.
 `,
   'wait-quiet': `tm wait-quiet was folded into the --pane-quiet flag in 0.3.0. Use 'tm wait <name> --pane-quiet' (or 'tm send <name> --prompt "..." --pane-quiet' for the send-then-wait composition).
+`,
+  archive: `tm archive was removed with the manual dispatcher Markdown ledger. Use 'tm kill <name> --status <merged|done|shelved|abandoned|blocked> [--note <text>]' to record close metadata, and query it with 'tm history --status <status>'. Existing ledger .md files are abandoned in place; tm does not migrate them.
 `,
 }

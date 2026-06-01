@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stdout": "{\n  \"items\": [\n    {\n      \"id\": \"73dcb2a7-09f8-73bd-0097-73d8c879d658\",\n      \"engine\": \"codex\",\n      \"createdAt\": \"2026-05-23T12:00:00.000Z\",\n      \"createdAtSource\": \"jsonl\",\n      \"topic\": \"codex newest task\"\n    },\n    {\n      \"id\": \"318c3005-fd17-4cec-08b4-42a43601a8f2\",\n      \"engine\": \"claude\",\n      \"createdAt\": \"2026-05-22T12:00:00.000Z\",\n      \"createdAtSource\": \"jsonl\",\n      \"topic\": \"claude middle task\"\n    },\n    {\n      \"id\": \"736229a0-d977-8262-0ada-38cdc54f3823\",\n      \"engine\": \"claude\",\n      \"createdAt\": \"2026-05-21T12:00:00.000Z\",\n      \"createdAtSource\": \"jsonl\",\n      \"topic\": \"claude oldest task\"\n    }\n  ],\n  \"nextCursor\": null\n}\n",
+  "stderr": ""
+}

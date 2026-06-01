@@ -367,7 +367,7 @@ Notes:
     \`tm doctor\` from inside the dispatcher claude session.
   * The Stop hook touches /tmp/claude-idle/<sid> for every Claude Code
     session, including the dispatcher itself. Nothing waits on that signal.
-  * AutoMemory and the live task ledger live under
-    ~/.claude/projects/<cwd-sanitized>/memory/ — not managed by this script.
+  * Teammate session lookup lives in tm history. AutoMemory remains
+    Claude-owned and is not managed by this script.
 $workspace_note
 EOF

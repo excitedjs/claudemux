@@ -29,7 +29,6 @@ agent reads exactly the one that applies. The references:
 | `wait-and-readback.md` | Wait for a turn an external actor drove; pane-quiet blind spot |
 | `inspect-and-resume.md` | Read `tm states`; look up / resume past Claude sessions and Codex threads |
 | `compact-a-teammate.md` | Check or compact a Claude teammate's context window |
-| `ledger-and-archive.md` | Append / archive the dispatcher task ledger |
 | `agent-teams.md` | Spawn an Agent Teams teammate (legacy reference — see SKILL.md for why this form is no longer surfaced as a dispatcher delegation option) |
 | `sid-rotation.md` | Diagnose `.sid` drift or a stuck Claude spawn |
 
@@ -56,7 +55,7 @@ inline steps into `SKILL.md`.
 The dispatcher orchestrates teammates exclusively through `tm`. Agent Teams
 and raw `claude -p` are intentionally not surfaced as dispatcher delegation
 forms; routing every teammate through the same `tm` verbs is what makes the
-ledger, identity record, and state-tracking machinery cover every teammate
+history index, identity record, and state-tracking machinery cover every teammate
 the same way. The scenario-routing table in `SKILL.md` is the up-to-date
 list of `tm` verbs and the reference each one belongs to.
 

@@ -291,7 +291,7 @@ export interface TeammateListing {
    * teammate has no live process; its identity snapshot survives kill
    * so it stays resumable by name.
    */
-  readonly state: 'idle' | 'busy' | 'unknown' | 'killed'
+  readonly state: 'idle' | 'busy' | 'borrowed' | 'unknown' | 'killed'
   /** Physical repo path the teammate is bound to. */
   readonly repo: string
   /** Runtime working directory (worktree path or `repo`). */
@@ -313,7 +313,7 @@ export type TeammateStatus =
       kind: 'present'
       name: TeammateName
       engine: EngineKind
-      state: 'idle' | 'busy' | 'unknown'
+      state: 'idle' | 'busy' | 'borrowed' | 'unknown'
       cwd: string
       pane: string | null
       diagnostics: Readonly<Record<string, string>>

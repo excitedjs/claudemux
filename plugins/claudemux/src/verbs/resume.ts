@@ -24,6 +24,8 @@ import type { Engine } from '../engines/engine'
 import type { EngineKind, ResumeRequest, TeammateName } from '../engines/types'
 import type { TmResult } from '../tm'
 import type { VerbContext } from './context'
+import { recordHistorySession } from '../persistence/history-index'
+import { worktreeBranchFor } from '../persistence/paths'
 
 /**
  * Recognise a worktree-shaped cwd
@@ -83,7 +85,22 @@ async function dispatchResume(engine: Engine, args: ResumeArgs, ctx: VerbContext
     prompt: args.prompt,
     displayName: args.displayName,
   }
-  return formatResume(await engine.resume(req, ctx.engineContext))
+  const result = await engine.resume(req, ctx.engineContext)
+  if (result.kind === 'resumed') {
+    recordHistorySession({
+      id: result.checkpoint ?? args.checkpoint,
+      engine: engine.kind,
+      name: args.name,
+      repo: args.repo,
+      cwd: args.cwd,
+      worktreeSlug: args.worktreeSlug,
+      branch: args.worktreeSlug === null ? null : worktreeBranchFor(args.worktreeSlug),
+      baseRef: null,
+      createdAt: new Date(ctx.engineContext.now()).toISOString(),
+      intent: args.displayName,
+    })
+  }
+  return formatResume(result)
 }
 
 export async function resumeVerb(args: ResumeArgs, ctx: VerbContext): Promise<TmResult> {

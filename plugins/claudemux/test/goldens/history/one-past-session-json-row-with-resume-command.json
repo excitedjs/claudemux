@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stdout": "{\n  \"items\": [\n    {\n      \"id\": \"f2ed1753-04d9-8b22-1e91-54e2e92bcf1e\",\n      \"engine\": \"claude\",\n      \"repo\": \"<SCRATCH>/dispatcher/claudemux-conftest-2c346071c114\",\n      \"cwd\": \"<SCRATCH>/dispatcher/claudemux-conftest-2c346071c114\",\n      \"createdAt\": \"2026-05-22T10:00:00.000Z\",\n      \"createdAtSource\": \"jsonl\",\n      \"state\": \"orphaned\",\n      \"topic\": \"review the auth refactor\",\n      \"lastAssistantPreview\": \"looked it over\",\n      \"resumeCommand\": \"tm resume --engine claude --repo '<SCRATCH>/dispatcher/claudemux-conftest-2c346071c114' --id 'f2ed1753-04d9-8b22-1e91-54e2e92bcf1e'\"\n    }\n  ],\n  \"nextCursor\": null\n}\n",
+  "stderr": ""
+}

@@ -1,0 +1,13 @@
+{
+  "/tmp/teammate-claudemux-conftest-c843d5f06a1e.sid": null,
+  "/tmp/teammate-claudemux-conftest-c843d5f06a1e.send-at": null,
+  "/tmp/teammate-claudemux-conftest-c843d5f06a1e.ready": null,
+  "/tmp/teammate-claudemux-conftest-c843d5f06a1e.cwd": null,
+  "<SCRATCH>/tmux-sessions": "",
+  "/tmp/claude-idle/982bdb42-be1e-e8cb-b8f0-ba8abe1c81bc": null,
+  "/tmp/claude-idle/982bdb42-be1e-e8cb-b8f0-ba8abe1c81bc.last": null,
+  "/tmp/claude-idle/982bdb42-be1e-e8cb-b8f0-ba8abe1c81bc.busy": null,
+  "<SCRATCH>/identity/teammate-claudemux-conftest-c843d5f06a1e.json": null,
+  "<SCRATCH>/identity/teammate-archive/claudemux-conftest-c843d5f06a1e.json": "{\"schema\":2,\"name\":\"claudemux-conftest-c843d5f06a1e\",\"engine\":\"claude\",\"repo\":\"<SCRATCH>/dispatcher/claudemux-conftest-c843d5f06a1e\",\"cwd\":\"<SCRATCH>/dispatcher/claudemux-conftest-c843d5f06a1e\",\"worktreeSlug\":null,\"createdAt\":1747900000,\"displayName\":\"close ledger replacement\"}\n",
+  "<SCRATCH>/identity/teammate-history.jsonl": "{\"schema\":1,\"event\":\"close\",\"recordedAt\":\"2026-05-23T12:00:00.000Z\",\"id\":\"982bdb42-be1e-e8cb-b8f0-ba8abe1c81bc\",\"engine\":\"claude\",\"name\":\"claudemux-conftest-c843d5f06a1e\",\"repo\":\"<SCRATCH>/dispatcher/claudemux-conftest-c843d5f06a1e\",\"cwd\":\"<SCRATCH>/dispatcher/claudemux-conftest-c843d5f06a1e\",\"worktreeSlug\":null,\"branch\":null,\"baseRef\":null,\"createdAt\":null,\"intent\":null,\"closeStatus\":\"done\",\"closeNotePreview\":\"merged through the public PR\"}\n"
+}

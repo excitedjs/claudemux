@@ -35,7 +35,7 @@ export interface IdentityStore {
   /**
    * Snapshot the live identity JSON into the archive directory. Called by
    * `tm kill` before `remove(name)` so a later `tm resume <name> <sid>`
-   * or `tm history <name>` can recover cwd / repo / worktreeSlug /
+   * or `tm history --name <name>` can recover cwd / repo / worktreeSlug /
    * displayName for the killed teammate without the agent shelling into
    * `/tmp`. No-op when there is no live record to archive.
    */

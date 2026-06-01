@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stdout": "{\n  \"items\": [\n    {\n      \"createdAt\": \"2026-05-22T00:00:00.000Z\",\n      \"createdAtSource\": \"jsonl\",\n      \"topic\": \"new-created-old-mtime\"\n    }\n  ],\n  \"nextCursor\": null\n}\n",
+  "stderr": ""
+}

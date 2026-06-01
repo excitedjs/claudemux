@@ -131,20 +131,20 @@ persistence). A Codex teammate uses it directly — no tmux, no screen-scraping.
 - **Liveness surfaces.** `tm status`, `tm ls`, and `tm states` combine the
   registry's pid/socket record, a short socket reachability probe, the Codex
   `thread/read` status when available, and the current thread's rollout mtime.
-  BUSY is true when the thread is active, a `tm` process has borrowed the
-  daemon for an in-flight turn, or the rollout file was modified inside the
-  short activity window; otherwise an alive daemon is idle, and an unreachable
-  daemon is unknown. In the states table, Codex LAST / PREVIEW come from the
-  current thread's latest assistant text in the rollout JSONL, matching Claude's
-  `.last`-backed row semantics.
+  STATE is `borrowed` when a `tm` process has borrowed the daemon for an
+  in-flight turn, `busy` when the thread is active or the rollout file was
+  modified inside the short activity window, `idle` when the daemon is alive
+  and available, and `unknown` when reachability is inconclusive. In the
+  states table, Codex LAST / PREVIEW come from the current thread's latest
+  assistant text in the rollout JSONL, matching Claude's `.last`-backed row
+  semantics.
 - **Durable inspection.** `tm last` reads the latest assistant final answer or
   commentary from the current thread's rollout JSONL. `tm ctx` reads the latest
   token-count event from the same rollout file and reports used tokens,
-  context-window tokens, and percentage. `tm history <name>` scans Codex rollout
-  files by recorded cwd, lists full canonical thread ids with age / size / topic
-  (the exact string `tm resume` accepts), and expands a thread-id prefix into a
-  detail block with the rollout path, first prompt, last assistant text, and
-  the `tm resume` command.
+  context-window tokens, and percentage. `tm history` is flag-only and merges
+  the forward tm-owned history index with Codex rollouts and Claude transcripts
+  into bounded JSON by default; rows carry full ids and a `resumeCommand` when
+  repo/cwd and engine anchors are known.
 - **Thread resume.** `tm resume <name> [<thread-id>]` for Codex starts a fresh
   per-teammate `app-server`. With an explicit thread id it writes that id back
   to `/tmp/teammate-codex/<name>/thread` and calls `thread/resume`; with no id

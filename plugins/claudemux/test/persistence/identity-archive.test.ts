@@ -1,7 +1,7 @@
 /**
  * Coverage for the post-kill identity archive — the snapshot `tm kill`
  * leaves behind so a later `tm resume <name> <sid>` or
- * `tm history <name>` can recover the killed teammate's launch
+ * `tm history --name <name>` can recover the killed teammate's launch
  * context (cwd / repo / worktreeSlug / displayName) without the
  * agent reading `/tmp/teammate-*.json` files by hand.
  *

@@ -372,8 +372,10 @@ function codexThreadIdFailure(threadId: string, name: string | null = null): str
   if (name !== null && looksLikeUuidPrefix(threadId)) {
     return (
       `received '${threadId}', looks like a thread-id prefix; resume ` +
-      `requires the full thread id. Run 'tm history ${name} ${threadId}' to ` +
-      `expand it, or 'tm history ${name}' to list past threads with full ids.`
+      `requires the full thread id at the engine layer. Run ` +
+      `'tm history --name ${name} --id ${threadId}' to expand it, or call ` +
+      `the top-level 'tm resume --name ${name} --id ${threadId} --engine codex' ` +
+      `form so tm can expand an unambiguous prefix.`
     )
   }
   return `codex thread id is not a valid uuid: ${threadId}`
@@ -464,10 +466,10 @@ function codexDaemonState(
   runtime: CodexRuntimeProbe | null = null,
   rollout: CodexRolloutSnapshot | null = null,
   nowMs = Date.now(),
-): 'idle' | 'busy' | 'unknown' {
+): 'idle' | 'busy' | 'borrowed' | 'unknown' {
   if (state === null || !isProcessAlive(state.pid)) return 'unknown'
   if (runtime?.threadState === 'busy') return 'busy'
-  if (daemonBorrowed(name)) return 'busy'
+  if (daemonBorrowed(name)) return 'borrowed'
   if (rolloutRecentlyActive(rollout, nowMs)) return 'busy'
   if (runtime?.threadState === 'idle') return 'idle'
   if (runtime?.threadState === 'unknown' || runtime?.socketReachable === 'no') return 'unknown'
@@ -498,7 +500,7 @@ function codexLastTextCells(
 function codexListExtras(
   nowSec: number,
   state: ReturnType<typeof readDaemonState>,
-  daemonState: 'idle' | 'busy' | 'unknown',
+  daemonState: 'idle' | 'busy' | 'borrowed' | 'unknown',
   rollout: CodexRolloutSnapshot | null,
   runtime: CodexRuntimeProbe | null,
 ): Readonly<Record<string, string>> {
@@ -512,7 +514,7 @@ function codexListExtras(
   const lastSeen = activitySeen === null ? '' : String(activitySeen)
   return {
     sidShort: thread.length === 0 ? 'codex' : thread.slice(0, 8),
-    busy: daemonState === 'busy' ? 'yes' : daemonState === 'idle' ? 'no' : '?',
+    busy: daemonState === 'busy' || daemonState === 'borrowed' ? 'yes' : daemonState === 'idle' ? 'no' : '?',
     last: lastText?.last ?? '-',
     preview: lastText?.preview ?? '-',
     pid,
@@ -530,7 +532,7 @@ function statusPane(args: {
   readonly state: ReturnType<typeof readDaemonState>
   readonly base: ReturnType<typeof readBaseRecord>
   readonly meta: ReturnType<typeof readCodexMeta>
-  readonly daemonState: 'idle' | 'busy' | 'unknown'
+  readonly daemonState: 'idle' | 'busy' | 'borrowed' | 'unknown'
   readonly rollout: CodexRolloutSnapshot | null
   readonly runtime: CodexRuntimeProbe | null
   readonly nowSec: number

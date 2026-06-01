@@ -4,7 +4,7 @@
  * Bash `bin/tm` is retired on the `next` line, so this no longer runs the
  * real `bin/tm` as a live oracle. Instead each scenario runs the native
  * handler once and compares its `TmResult` to a committed golden JSON file
- * at `test/goldens/<verb>/<slug>.json`. A mutating verb (`kill`, `archive`,
+ * at `test/goldens/<verb>/<slug>.json`. A mutating verb (`kill`,
  * `reload`) additionally pins its post-state — what changed on the
  * filesystem — to a sibling `<slug>.fs.json`.
  *
@@ -43,7 +43,6 @@ import { createHash } from 'node:crypto'
 import {
   existsSync,
   mkdirSync,
-  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -68,6 +67,7 @@ import {
   sidFile,
 } from '../src/persistence/paths'
 import { archivedIdentityFile, identityFile } from '../src/persistence/identity-store'
+import { historyIndexFile } from '../src/persistence/history-index'
 import { TEAMMATE_RECORD_SCHEMA } from '../src/engines/teammate-record'
 import {
   codexBorrowLockFile,
@@ -134,8 +134,8 @@ let savedTz: string | undefined
  * Different verbs reach different forms in their output:
  *
  *   - `tm history` realpaths the repo path before encoding (mirroring
- *     `tm`'s `cd && pwd -P`), so its `file:` line carries the realpath form.
- *   - `tm archive` and `tm mem` encode `dispatcherDir` *without* realpath,
+ *     `tm`'s `cd && pwd -P`), so its JSON path fields carry the realpath form.
+ *   - `tm mem` encodes `dispatcherDir` *without* realpath,
  *     so their stderr / file paths carry the literal form regardless of OS.
  *
  * Substituting both forms to the same `<SCRATCH-ENC>` placeholder keeps the
@@ -148,10 +148,10 @@ let encodedScratchLiteral = ''
 
 // Pin the timezone for the whole conformance file — set at module load so
 // the FIXED_NOW Date literal below resolves under UTC, before any Date
-// operation reaches the OS's local zone. `tm history`'s detail page formats
-// `last_seen` with `new Date(...).getHours()` / `.getMinutes()` etc, which
-// honor the process timezone; without this pin the goldens shift between
-// the dev machine (UTC+8 on the author's box) and CI (UTC). Node consults
+// operation reaches the OS's local zone. History JSON carries ISO timestamps;
+// without this pin, any fixture that exercises local-time formatting in a
+// verb can shift between the dev machine (UTC+8 on the author's box) and CI
+// (UTC). Node consults
 // `process.env.TZ` via `tzset()` on each Date construction, so writing it
 // here takes effect on subsequent Date operations even though Node has
 // already started.
@@ -159,10 +159,9 @@ savedTz = process.env.TZ
 process.env.TZ = 'UTC'
 
 /**
- * The wall-clock the harness pins. `tm history`'s detail page renders an
- * absolute `last_seen` line (and `tm archive` stamps today's date into the
- * archive ledger). Both reach `Date.now()` / `new Date()` directly; without
- * a pinned clock the goldens would shift every run. Vitest's
+ * The wall-clock the harness pins. `tm history` and close-metadata writes
+ * reach `Date.now()` / `new Date()` directly; without a pinned clock the
+ * goldens would shift every run. Vitest's
  * `useFakeTimers({ toFake: ['Date'] })` freezes `Date` without freezing
  * `setTimeout` / `setInterval`, so the hot-path verbs' poll loops still
  * advance through real time (their conformance scenarios never enter those
@@ -471,8 +470,8 @@ function uniqueName(): string {
 
 /**
  * A deterministic UUID-formatted hex string (8-4-4-4-12). Each call within
- * a scenario returns a fresh value. For sids that must pass UUID-shape
- * validation in `tm resume` / `tm history` detail.
+ * a scenario returns a fresh value. For sids/thread ids that must pass
+ * UUID-shape validation in resume and history fixtures.
  */
 function uniqueUuid(): string {
   const hex = currentRng()
@@ -559,9 +558,10 @@ function historyProjectDir(repo: string): string {
 
 /**
  * Write a past-session transcript jsonl for a repo, pinning its mtime
- * `ageSeconds` in the past — `tm history`'s `AGE` column and `ls -t` ordering
- * both read mtime, so a scenario with several sessions passes distinct,
- * bucket-stable ages. The repo directory must already exist on disk.
+ * `ageSeconds` in the past. `tm history` prefers the first JSONL timestamp
+ * for filtering/sorting and exposes mtime only as a fallback; age pinning
+ * still keeps fallback scenarios deterministic. The repo directory must
+ * already exist on disk.
  */
 function writeHistoryTranscript(
   repo: string,
@@ -579,9 +579,8 @@ function writeHistoryTranscript(
 
 /**
  * A `user` transcript line carrying a plain-string prompt, optionally
- * timestamped. Real Claude Code entries always carry a `.timestamp`, so a
- * `history`-detail fixture passes one to stay realistic — see the note on
- * `readHistoryData` for why a timestamp-less transcript is a degenerate case.
+ * timestamped. Real Claude Code entries always carry a `.timestamp`; history
+ * fixtures pass one when they need to exercise JSONL-created-time semantics.
  */
 function userLine(text: string, timestamp?: string): string {
   const entry: Record<string, unknown> = {
@@ -623,50 +622,9 @@ function reloadWorld(repo: string, sid?: string): string[] {
   return paths
 }
 
-/** The dispatcher's auto-memory directory — `tm`'s `memory_dir`, the `archive` world. */
-function archiveMemoryDir(): string {
-  return join(projectsDir, encodeProjectDir(dispatcherDir), 'memory')
-}
-
-/**
- * Wipe and recreate the memory directory. `tm`'s `memory_dir` is keyed to the
- * dispatcher, not a per-test name, so every `archive` scenario starts from a
- * clean slate here rather than inheriting the previous scenario's ledgers.
- */
-function resetMemoryDir(): void {
-  const dir = archiveMemoryDir()
-  rmSync(dir, { recursive: true, force: true })
-  mkdirSync(dir, { recursive: true })
-}
-
-/** Write the active dispatcher-task ledger; the memory dir must exist first. */
-function writeActiveLedger(content: string): void {
-  writeFileSync(join(archiveMemoryDir(), 'active-dispatcher-tasks.md'), content)
-}
-
-/** Write the dispatcher-task archive ledger; the memory dir must exist first. */
-function writeArchiveLedger(content: string): void {
-  writeFileSync(join(archiveMemoryDir(), 'dispatcher-tasks-archive.md'), content)
-}
-
-/** A two-entry active ledger — `t-alpha` mid-list, `t-beta` last. */
-const STANDARD_LEDGER = `# Active dispatcher tasks
-
-### t-alpha  [in progress]
-- repo: acme
-- branch: feature/login
-- intent: wire up the login flow
-- notes: blocked on review
-
-### t-beta  [PAUSED — waiting on infra]
-- repo: widgets
-- branch: main
-- intent: ship the widget
-`
-
 /**
  * A filesystem snapshot — each path mapped to its content, or `null` when the
- * path is absent. A mutating verb (`kill`, `archive`) cannot be conformance-
+ * path is absent. A mutating verb (`kill`, `reload`) cannot be conformance-
  * checked by running the oracle and native against the *same* fixture: the
  * oracle changes the world the native run would then see. Such a scenario
  * instead supplies a `snapshot` closure; the harness snapshots the world,
@@ -680,24 +638,6 @@ function snapshotPaths(paths: readonly string[]): FsSnapshot {
   const snap: FsSnapshot = {}
   for (const path of paths) {
     snap[path] = existsSync(path) ? readFileSync(path, 'utf8') : null
-  }
-  return snap
-}
-
-/** Snapshot every file under a directory tree — for a verb whose world is a subtree. */
-function snapshotTree(root: string): FsSnapshot {
-  const snap: FsSnapshot = {}
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = join(dir, entry.name)
-      if (entry.isDirectory()) walk(full)
-      else snap[full] = readFileSync(full, 'utf8')
-    }
-  }
-  try {
-    walk(root)
-  } catch {
-    // An absent root is an empty snapshot — `archive` may run before its dir.
   }
   return snap
 }
@@ -728,13 +668,7 @@ interface Scenario {
    * the harness to the snapshot / reset / effects-diff path.
    */
   setup: () => { args: string[]; stdin?: string; snapshot?: () => FsSnapshot }
-  /**
-   * Run this scenario only on macOS. `tm history`'s detail-mode success path
-   * formats a timestamp with BSD `date -r <epoch>`; on GNU `date -r` means
-   * "reference file", so under `tm`'s `set -e` the whole invocation crashes.
-   * The native verb is correct on either OS — but the differential oracle is
-   * only sane where `tm` itself is, so those scenarios are pinned to macOS.
-   */
+  /** Run this scenario only on macOS when the fixture targets macOS-specific behavior. */
   darwinOnly?: boolean
 }
 
@@ -1233,89 +1167,153 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
     verb: 'history',
     scenarios: [
       {
-        name: 'no repo argument → the usage error',
-        setup: () => ({ args: [] }),
-      },
-      {
-        name: 'a repo that is not a dispatcher subdirectory → the repo-not-found error',
-        setup: () => ({ args: [uniqueName()] }),
-      },
-      {
-        name: 'repo present, no project dir → the "no past sessions" line',
+        name: 'no filters → an empty JSON envelope',
         setup: () => {
-          const repo = uniqueName()
-          makeRepoDir(repo)
-          return { args: [repo] }
+          setSessions('')
+          return { args: [] }
         },
       },
       {
-        name: 'project dir present but holding no transcripts → the "no past sessions" line',
+        name: 'a legacy positional argument → the removed-grammar error',
+        setup: () => ({ args: [uniqueName()] }),
+      },
+      {
+        name: 'an unknown flag → the unknown-flag error',
+        setup: () => ({ args: ['--bogus'] }),
+      },
+      {
+        name: 'an unknown --fields entry → the valid-field-list error',
+        setup: () => ({ args: ['--fields', 'id,nope'] }),
+      },
+      {
+        name: 'repo present, no project dir → empty JSON items',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          return { args: ['--repo', repo] }
+        },
+      },
+      {
+        name: 'project dir present but holding no transcripts → empty JSON items',
         setup: () => {
           const repo = uniqueName()
           makeRepoDir(repo)
           mkdirSync(historyProjectDir(repo), { recursive: true })
-          return { args: [repo] }
+          return { args: ['--repo', repo] }
         },
       },
       {
-        name: 'one past session → a single-row table',
+        name: 'one past session → JSON row with resume command',
         setup: () => {
           const repo = uniqueName()
+          const sid = uniqueUuid()
           makeRepoDir(repo)
-          writeHistoryTranscript(repo, uniqueName(), [
-            userLine('review the auth refactor'),
+          writeHistoryTranscript(repo, sid, [
+            userLine('review the auth refactor', '2026-05-22T10:00:00.000Z'),
             assistantTextLine('looked it over'),
           ])
-          return { args: [repo] }
+          return {
+            args: [
+              '--repo',
+              repo,
+              '--fields',
+              'id,engine,repo,cwd,createdAt,createdAtSource,state,topic,lastAssistantPreview,resumeCommand',
+            ],
+          }
         },
       },
       {
-        name: 'multiple sessions → listed newest-first, columns aligned by column',
+        name: 'multiple sessions → sorted by JSONL-created time over mtime',
         setup: () => {
           const repo = uniqueName()
           makeRepoDir(repo)
-          // Distinct, bucket-stable ages: `ls -t` orders them newest-first.
-          writeHistoryTranscript(repo, uniqueName(), [userLine('the newest task')], 4000)
-          writeHistoryTranscript(repo, uniqueName(), [userLine('the middle task')], 40000)
-          writeHistoryTranscript(repo, uniqueName(), [userLine('the oldest task')], 100000)
-          return { args: [repo] }
+          writeHistoryTranscript(repo, uniqueUuid(), [
+            userLine('mtime-newer but created older', '2026-05-01T00:00:00.000Z'),
+          ], 1000)
+          writeHistoryTranscript(repo, uniqueUuid(), [
+            userLine('mtime-older but created newer', '2026-05-22T00:00:00.000Z'),
+          ], 100000)
+          return { args: ['--repo', repo, '--fields', 'id,createdAt,createdAtSource,topic'] }
         },
       },
       {
-        name: 'mixed Claude sessions and Codex rollouts → merged newest-first with engine column',
+        name: '--since filters by JSONL-created time, not mtime',
         setup: () => {
           const repo = uniqueName()
           makeRepoDir(repo)
-          writeHistoryTranscript(repo, uniqueUuid(), [userLine('claude middle task')], 40000)
+          writeHistoryTranscript(repo, uniqueUuid(), [
+            userLine('old-created-new-mtime', '2026-05-01T00:00:00.000Z'),
+          ], 1000)
+          writeHistoryTranscript(repo, uniqueUuid(), [
+            userLine('new-created-old-mtime', '2026-05-22T00:00:00.000Z'),
+          ], 100000)
+          return {
+            args: [
+              '--repo',
+              repo,
+              '--since',
+              '2026-05-20T00:00:00.000Z',
+              '--fields',
+              'createdAt,createdAtSource,topic',
+            ],
+          }
+        },
+      },
+      {
+        name: 'mixed Claude sessions and Codex rollouts → merged newest-first JSON',
+        setup: () => {
+          const repo = uniqueName()
+          makeRepoDir(repo)
+          writeHistoryTranscript(repo, uniqueUuid(), [
+            userLine('claude middle task', '2026-05-22T12:00:00.000Z'),
+          ], 40000)
           writeCodexHistoryRollout(
             repo,
             uniqueUuid(),
             'codex newest task',
             4000,
           )
-          writeHistoryTranscript(repo, uniqueUuid(), [userLine('claude oldest task')], 100000)
-          return { args: [repo] }
+          writeHistoryTranscript(repo, uniqueUuid(), [
+            userLine('claude oldest task', '2026-05-21T12:00:00.000Z'),
+          ], 100000)
+          return { args: ['--repo', repo, '--fields', 'id,engine,createdAt,createdAtSource,topic'] }
         },
       },
       {
-        name: 'a session with no user prompt → the "(no user prompt)" topic',
+        name: 'a session with no user prompt → null topic',
         setup: () => {
           const repo = uniqueName()
           makeRepoDir(repo)
           writeHistoryTranscript(repo, uniqueName(), [assistantTextLine('only an assistant turn')])
-          return { args: [repo] }
+          return { args: ['--repo', repo, '--fields', 'topic,lastAssistantPreview'] }
         },
       },
       {
-        name: 'the live session is flagged with * in the mark column',
+        name: 'a live session merges identity attribution and transcript enrichment',
         setup: () => {
           const repo = uniqueName()
-          const liveSid = uniqueName()
+          const liveSid = uniqueUuid()
           makeRepoDir(repo)
-          writeHistoryTranscript(repo, liveSid, [userLine('the live session')], 5000)
-          writeHistoryTranscript(repo, uniqueName(), [userLine('an older session')], 50000)
+          setSessions(`${sessionLine(repo)}\n`)
           marker(sidFile(repo), `${liveSid}\n`)
-          return { args: [repo] }
+          marker(identityFile(repo), `${JSON.stringify({
+            schema: TEAMMATE_RECORD_SCHEMA,
+            name: repo,
+            engine: 'claude',
+            repo: realpathSync(join(dispatcherDir, repo)),
+            cwd: realpathSync(join(dispatcherDir, repo)),
+            worktreeSlug: null,
+            createdAt: 1747900000,
+            displayName: 'finish the live branch',
+          })}\n`)
+          writeHistoryTranscript(repo, liveSid, [
+            userLine('the live session', '2026-05-22T09:00:00.000Z'),
+            assistantTextLine('live answer'),
+          ], 5000)
+          writeHistoryTranscript(repo, uniqueUuid(), [
+            userLine('an older session', '2026-05-20T09:00:00.000Z'),
+          ], 50000)
+          return { args: ['--repo', repo, '--name', repo, '--fields', 'id,name,state,intent,topic,lastAssistantPreview'] }
         },
       },
       {
@@ -1327,122 +1325,50 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
           // code points, not 60 bytes — built so no control char is a literal.
           const prompt = `${String.fromCharCode(1, 7)}诊断这个上下文窗口使用问题这是一段足够长的中文首条提示用来验证按字符截断到六十个字符的行为再补一些文字`
           writeHistoryTranscript(repo, uniqueName(), [userLine(prompt)])
-          return { args: [repo] }
+          return { args: ['--repo', repo, '--fields', 'topic'] }
         },
       },
       {
-        name: 'detail: an invalid sid prefix → the validation error',
+        name: 'close status from the forward index is queryable',
         setup: () => {
-          const repo = uniqueName()
-          makeRepoDir(repo)
-          return { args: [repo, 'XYZ-not-hex'] }
-        },
-      },
-      {
-        name: 'detail: no project dir → the "no project dir" error',
-        setup: () => {
-          const repo = uniqueName()
-          makeRepoDir(repo)
-          return { args: [repo, 'abcdef'] }
-        },
-      },
-      {
-        name: 'detail: a prefix matching no session → the not-found error',
-        setup: () => {
-          const repo = uniqueName()
-          makeRepoDir(repo)
-          writeHistoryTranscript(repo, uniqueName(), [userLine('a session that will not match')])
-          return { args: [repo, 'bbbbbbbb'] }
-        },
-      },
-      {
-        name: 'detail: a prefix matching multiple sessions → the ambiguity error',
-        setup: () => {
-          const repo = uniqueName()
-          makeRepoDir(repo)
-          const shared = uniqueUuid().slice(0, 8)
-          writeHistoryTranscript(repo, `${shared}-1111`, [userLine('first')])
-          writeHistoryTranscript(repo, `${shared}-2222`, [userLine('second')])
-          return { args: [repo, shared] }
-        },
-      },
-      {
-        name: 'detail: a resolved session → the full detail block',
-        darwinOnly: true,
-        setup: () => {
-          const repo = uniqueName()
-          const sid = uniqueUuid()
-          makeRepoDir(repo)
-          writeHistoryTranscript(repo, sid, [
+          const id = uniqueUuid()
+          writeFileSync(historyIndexFile(), [
             JSON.stringify({
-              type: 'user',
-              message: { role: 'user', content: 'review the auth flow' },
-              timestamp: '2026-05-12T14:21:33.000Z',
+              schema: 1,
+              event: 'session',
+              recordedAt: '2026-05-23T12:00:00.000Z',
+              id,
+              engine: 'claude',
+              name: 'reviewer',
+              repo: '/repo/reviewer',
+              cwd: '/repo/reviewer',
+              worktreeSlug: null,
+              branch: null,
+              baseRef: null,
+              createdAt: '2026-05-23T12:00:00.000Z',
+              intent: 'review dispatcher ledger',
+              closeStatus: null,
+              closeNotePreview: null,
             }),
-            assistantTextLine('here is the review of the auth flow'),
-            usageLine(8000, 1000, 2000, 150),
-          ])
-          return { args: [repo, sid.slice(0, 8)] }
-        },
-      },
-      {
-        name: 'detail: a transcript whose peak exceeds 210k → the detected-1M ctx line',
-        darwinOnly: true,
-        setup: () => {
-          const repo = uniqueName()
-          const sid = uniqueUuid()
-          makeRepoDir(repo)
-          writeHistoryTranscript(repo, sid, [
-            userLine('a long-running session', '2026-05-12T09:15:00.000Z'),
-            assistantTextLine('working on it'),
-            usageLine(250000, 0, 0, 100),
-          ])
-          return { args: [repo, sid.slice(0, 8)] }
-        },
-      },
-      {
-        name: 'detail: a transcript with no usage → the "(no usage data)" ctx line',
-        darwinOnly: true,
-        setup: () => {
-          const repo = uniqueName()
-          const sid = uniqueUuid()
-          makeRepoDir(repo)
-          writeHistoryTranscript(repo, sid, [
-            userLine('a question', '2026-05-12T09:15:00.000Z'),
-            assistantTextLine('an answer'),
-          ])
-          return { args: [repo, sid.slice(0, 8)] }
-        },
-      },
-      {
-        name: 'detail: an unparseable transcript line → the jq-failure sentinel rendering',
-        darwinOnly: true,
-        setup: () => {
-          const repo = uniqueName()
-          const sid = uniqueUuid()
-          makeRepoDir(repo)
-          // `{not json` syntax-errors `jq -s`, failing the whole pass — `tm`
-          // falls back to six empty fields, and native's `JSON.parse` throws.
-          writeHistoryTranscript(repo, sid, [
-            '{not json',
-            userLine('a question'),
-            assistantTextLine('an answer'),
-          ])
-          return { args: [repo, sid.slice(0, 8)] }
-        },
-      },
-      {
-        name: 'detail: a last-assistant text past 1500 chars is truncated',
-        darwinOnly: true,
-        setup: () => {
-          const repo = uniqueName()
-          const sid = uniqueUuid()
-          makeRepoDir(repo)
-          writeHistoryTranscript(repo, sid, [
-            userLine('produce a long answer', '2026-05-12T09:15:00.000Z'),
-            assistantTextLine('x'.repeat(2000)),
-          ])
-          return { args: [repo, sid.slice(0, 8)] }
+            JSON.stringify({
+              schema: 1,
+              event: 'close',
+              recordedAt: '2026-05-23T12:30:00.000Z',
+              id,
+              engine: 'claude',
+              name: 'reviewer',
+              repo: '/repo/reviewer',
+              cwd: '/repo/reviewer',
+              worktreeSlug: null,
+              branch: null,
+              baseRef: null,
+              createdAt: null,
+              intent: null,
+              closeStatus: 'done',
+              closeNotePreview: 'merged in the linked PR',
+            }),
+          ].join('\n') + '\n')
+          return { args: ['--status', 'done', '--grep', 'ledger', '--fields', 'id,createdAt,intent,closeStatus,closeNotePreview'] }
         },
       },
     ],
@@ -1572,6 +1498,52 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
         },
       },
       {
+        name: '--status on a clean kill writes close metadata into the history index',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueUuid()
+          const repoPath = join(dispatcherDir, repo)
+          makeRepoDir(repo)
+          setSessions(`${sessionLine(repo)}\n`)
+          marker(sidFile(repo), `${sid}\n`)
+          marker(identityFile(repo), `${JSON.stringify({
+            schema: TEAMMATE_RECORD_SCHEMA,
+            name: repo,
+            engine: 'claude',
+            repo: repoPath,
+            cwd: repoPath,
+            worktreeSlug: null,
+            createdAt: 1747900000,
+            displayName: 'close ledger replacement',
+          })}\n`)
+          return {
+            args: [repo, '--status', 'done', '--note', 'merged through the public PR'],
+            snapshot: () =>
+              snapshotPaths([
+                ...killWorld(repo, sid),
+                identityFile(repo),
+                archivedIdentityFile(repo),
+                historyIndexFile(),
+              ]),
+          }
+        },
+      },
+      {
+        name: '--id finalization writes close metadata without stopping a process',
+        setup: () => {
+          const repo = uniqueName()
+          const sid = uniqueUuid()
+          makeRepoDir(repo)
+          writeHistoryTranscript(repo, sid, [
+            userLine('recover an orphaned session', '2026-05-22T09:00:00.000Z'),
+          ])
+          return {
+            args: ['--id', sid.slice(0, 8), '--status', 'abandoned', '--note', 'host rebooted'],
+            snapshot: () => snapshotPaths([historyIndexFile()]),
+          }
+        },
+      },
+      {
         name: 'a teammate that is not running, with no markers → "not running", no effects',
         setup: () => {
           const repo = uniqueName()
@@ -1658,135 +1630,6 @@ const CONFORMANCE: { verb: string; scenarios: Scenario[] }[] = [
           return {
             args: [repo],
             snapshot: () => snapshotPaths([...killWorld(repo), identityFile(repo)]),
-          }
-        },
-      },
-    ],
-  },
-  {
-    verb: 'archive',
-    scenarios: [
-      {
-        name: 'no id argument → the usage error',
-        setup: () => {
-          resetMemoryDir()
-          return { args: [], stdin: 'an outcome' }
-        },
-      },
-      {
-        name: 'an unknown flag → the unknown-flag error',
-        setup: () => {
-          resetMemoryDir()
-          return { args: ['--bogus', 't-alpha'], stdin: 'an outcome' }
-        },
-      },
-      {
-        name: 'a second positional → the unexpected-arg error',
-        setup: () => {
-          resetMemoryDir()
-          return { args: ['t-alpha', 't-beta'], stdin: 'an outcome' }
-        },
-      },
-      {
-        name: 'a bare --status with no value → tm exits 1 with no output',
-        setup: () => {
-          resetMemoryDir()
-          return { args: ['--status'], stdin: 'an outcome' }
-        },
-      },
-      {
-        name: 'no active ledger → the no-ledger error',
-        setup: () => {
-          resetMemoryDir()
-          return { args: ['t-alpha'], stdin: 'an outcome' }
-        },
-      },
-      {
-        name: 'a whitespace-only outcome on stdin → the outcome-required error',
-        setup: () => {
-          resetMemoryDir()
-          writeActiveLedger(STANDARD_LEDGER)
-          return { args: ['t-alpha'], stdin: '   \n \t ' }
-        },
-      },
-      {
-        name: 'an id not in the ledger → the not-found error with the available list',
-        setup: () => {
-          resetMemoryDir()
-          writeActiveLedger(STANDARD_LEDGER)
-          return { args: ['t-missing'], stdin: 'an outcome' }
-        },
-      },
-      {
-        name: 'an id matching two entries → the ambiguity error',
-        setup: () => {
-          resetMemoryDir()
-          writeActiveLedger(
-            '# Active dispatcher tasks\n\n### t-dup  [a]\n- repo: one\n\n### t-dup  [b]\n- repo: two\n',
-          )
-          return { args: ['t-dup'], stdin: 'an outcome' }
-        },
-      },
-      {
-        name: 'a happy-path archive → block cut from active, entry seeds a fresh archive',
-        setup: () => {
-          resetMemoryDir()
-          writeActiveLedger(STANDARD_LEDGER)
-          return {
-            args: ['t-alpha'],
-            stdin: 'shipped the login flow\n',
-            snapshot: () => snapshotTree(archiveMemoryDir()),
-          }
-        },
-      },
-      {
-        name: 'archiving when the archive file exists → entry prepended above the first',
-        setup: () => {
-          resetMemoryDir()
-          writeActiveLedger(STANDARD_LEDGER)
-          writeArchiveLedger(
-            '# Dispatcher task archive\n\n### t-old  [done]\n- outcome: an earlier task\n',
-          )
-          return {
-            args: ['t-alpha'],
-            stdin: 'shipped it',
-            snapshot: () => snapshotTree(archiveMemoryDir()),
-          }
-        },
-      },
-      {
-        name: '--status overrides the carried [tag]',
-        setup: () => {
-          resetMemoryDir()
-          writeActiveLedger(STANDARD_LEDGER)
-          return {
-            args: ['t-alpha', '--status', 'reverted'],
-            stdin: 'rolled it back',
-            snapshot: () => snapshotTree(archiveMemoryDir()),
-          }
-        },
-      },
-      {
-        name: 'the last block in the ledger → archived through to EOF',
-        setup: () => {
-          resetMemoryDir()
-          writeActiveLedger(STANDARD_LEDGER)
-          return {
-            args: ['t-beta'],
-            stdin: 'the widget shipped',
-            snapshot: () => snapshotTree(archiveMemoryDir()),
-          }
-        },
-      },
-      {
-        name: 'a block with no repo/branch/intent lines → "(unknown)" fields',
-        setup: () => {
-          resetMemoryDir()
-          writeActiveLedger('# Active dispatcher tasks\n\n### t-bare  [done]\n- notes: just a note\n')
-          return {
-            args: ['t-bare'],
-            stdin: 'closed it out',
-            snapshot: () => snapshotTree(archiveMemoryDir()),
           }
         },
       },

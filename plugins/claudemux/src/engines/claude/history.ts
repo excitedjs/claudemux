@@ -326,8 +326,8 @@ export interface ClaudeHistoryListResult {
 }
 
 /**
- * `tm history <name>` — list a teammate name's past Claude Code
- * sessions, one per transcript jsonl, newest first. One project-dir
+ * Engine-local Claude history list — list a teammate name's past Claude
+ * Code sessions, one per transcript jsonl, newest first. One project-dir
  * walk produces both the structured entries (returned for engine-level
  * consumers like `Engine.history`'s `HistoryResult.entries`) and the
  * `column -t`-aligned text rows. Repo-missing surfaces as `{ tmResult:
@@ -367,9 +367,8 @@ export async function claudeHistoryList(name: string, cwd: string | null, env: C
 }
 
 /**
- * `tm history <name> <sid-or-prefix>` — the detail view of one past
- * session. Resolves the prefix to a unique transcript, then prints
- * the history-detail block.
+ * Engine-local Claude history detail. Resolves the prefix to a unique
+ * transcript, then prints the history-detail block.
  */
 function historyDetail(teammateName: string, projectDir: string, prefix: string): TmResult {
   if (!/^[0-9a-f-]{1,36}$/.test(prefix)) {
@@ -491,7 +490,7 @@ export function hasClaudeHistoryForCwd(cwd: string, projectsDir: string): boolea
 
 export async function claudeHistory(args: readonly string[], env: ClaudeVerbEnv): Promise<TmResult> {
   const name = args[0] ?? ''
-  if (name.length === 0) return die('usage: tm history <name> [<sid-or-prefix>]')
+  if (name.length === 0) return die('tm history: internal Claude history adapter requires a teammate name')
 
   const sidArg = args[1] ?? ''
   const cwdArg = args[2] && args[2].length > 0 ? args[2] : null

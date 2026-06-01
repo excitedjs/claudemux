@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stdout": "{\n  \"items\": [\n    {\n      \"id\": \"61c16b39-e94e-0dd8-a785-5e342a2391e3\",\n      \"createdAt\": \"2026-05-01T00:00:00.000Z\",\n      \"createdAtSource\": \"jsonl\",\n      \"topic\": \"mtime-newer but created older\"\n    },\n    {\n      \"id\": \"ee5eea42-41ea-90c7-be6d-cf6bde32f1ce\",\n      \"createdAt\": \"2026-05-22T00:00:00.000Z\",\n      \"createdAtSource\": \"jsonl\",\n      \"topic\": \"mtime-older but created newer\"\n    }\n  ],\n  \"nextCursor\": null\n}\n",
+  "stderr": ""
+}

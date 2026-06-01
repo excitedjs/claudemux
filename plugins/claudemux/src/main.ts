@@ -8,26 +8,11 @@
  * between source and runtime.
  */
 
-import { productionEnv, runCli, triggersHelp } from './cli'
-
-/** Read all of stdin; `undefined` on an interactive TTY so we never block on a never-arriving EOF. */
-async function readStdin(): Promise<string | undefined> {
-  if (process.stdin.isTTY) return undefined
-  const chunks: Buffer[] = []
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
-  return Buffer.concat(chunks).toString('utf8')
-}
+import { productionEnv, runCli } from './cli'
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2)
-  // `archive` is the only verb that reads stdin. Slurp it only when the
-  // invocation will actually reach the verb handler — `tm archive --help` /
-  // `tm archive -h` route to the help branch and read no stdin in bash, so
-  // we must skip the slurp there too or the launcher blocks indefinitely on
-  // any caller whose stdin is a pipe an upstream producer holds open.
-  const needsStdin = argv[0] === 'archive' && !triggersHelp(argv.slice(1))
-  const stdin = needsStdin ? await readStdin() : undefined
-  const result = await runCli(argv, productionEnv(), stdin)
+  const result = await runCli(argv, productionEnv())
   if (result.stdout) process.stdout.write(result.stdout)
   if (result.stderr) process.stderr.write(result.stderr)
   process.exitCode = result.code

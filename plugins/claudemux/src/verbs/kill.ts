@@ -9,10 +9,16 @@
  * SIGTERM / etc); the verb owns identity bookkeeping and exit code.
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 
 import { formatKill } from './format'
-import { identityFile } from '../persistence/identity-store'
+import { identityFile, read as readIdentity } from '../persistence/identity-store'
+import {
+  recordHistoryClose,
+  type HistoryCloseStatus,
+} from '../persistence/history-index'
+import { sidFile } from '../persistence/paths'
+import { codexThreadFile } from '../engines/codex/persistence'
 import type { TeammateName } from '../engines/types'
 import type { TmResult } from '../tm'
 import type { VerbContext } from './context'
@@ -36,17 +42,54 @@ import type { VerbContext } from './context'
  * schema parse), so a record this build cannot parse still gets
  * swept.
  */
-export async function killVerb(name: TeammateName, ctx: VerbContext): Promise<TmResult> {
+export interface KillOptions {
+  readonly status: HistoryCloseStatus | null
+  readonly note: string | null
+}
+
+function readMarker(path: string): string | null {
+  try {
+    const value = readFileSync(path, 'utf8').trim()
+    return value.length > 0 ? value : null
+  } catch {
+    return null
+  }
+}
+
+function closeIdFor(name: string, engine: string | null): string | null {
+  if (engine === 'codex') return readMarker(codexThreadFile(name))
+  if (engine === 'claude') return readMarker(sidFile(name))
+  return readMarker(sidFile(name)) ?? readMarker(codexThreadFile(name))
+}
+
+export async function killVerb(
+  name: TeammateName,
+  ctx: VerbContext,
+  opts: KillOptions = { status: null, note: null },
+): Promise<TmResult> {
   const resolved = await ctx.router.resolve(name)
   const engine = resolved?.engine ?? ctx.engines.get('claude')
   if (engine === undefined) return formatKill(name, { kind: 'not-found' })
   const hadIdentityFile = existsSync(identityFile(name))
+  const identity = readIdentity(name)
+  const closeId = closeIdFor(name, resolved?.engine.kind ?? identity?.engine ?? null)
   const result = await engine.kill({ name }, ctx.engineContext)
   // Archive before remove: a later `tm resume <name> <sid>` /
-  // `tm history <name>` reads the snapshot to recover the killed
+  // `tm history --name <name>` reads the snapshot to recover the killed
   // teammate's cwd / repo / worktreeSlug / displayName, so the agent
   // never has to scrape `/tmp` directly.
   if (result.kind === 'killed' || (result.kind === 'not-found' && hadIdentityFile)) {
+    if (opts.status !== null) {
+      recordHistoryClose({
+        id: closeId,
+        engine: resolved?.engine.kind ?? identity?.engine ?? null,
+        name,
+        repo: identity?.repo ?? null,
+        cwd: identity?.cwd ?? null,
+        status: opts.status,
+        note: opts.note,
+      })
+    }
     await ctx.identity.archive(name)
     await ctx.identity.remove(name)
   }

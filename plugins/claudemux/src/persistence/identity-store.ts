@@ -58,7 +58,7 @@ import type { EngineKind, TeammateName } from '../engines/types'
  * `beforeEach` is honoured by code paths that captured the module
  * earlier.
  */
-function identityRoot(): string {
+export function identityRoot(): string {
   return process.env['CLAUDEMUX_IDENTITY_ROOT'] || '/tmp'
 }
 
@@ -70,7 +70,7 @@ export function identityFile(name: TeammateName): string {
 /**
  * Directory holding archived identity records — written when `tm kill`
  * tears down a teammate, so a later `tm resume <name> <sid>` or
- * `tm history <name>` can look up the killed teammate's cwd / repo /
+ * `tm history --name <name>` can look up the killed teammate's cwd / repo /
  * worktreeSlug / displayName without the agent reading `/tmp` files
  * by hand.
  *

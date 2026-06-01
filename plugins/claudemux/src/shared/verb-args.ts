@@ -25,9 +25,12 @@ export interface CompactArgs {
 export interface ResumeArgs {
   name: string
   sid: string
+  repo: string
   prompt: string
   hasPrompt: boolean
   engine: EngineFlag | null
+  intent: string
+  id: string
 }
 
 /** Parsed arg vector for `tm send`. */
@@ -44,6 +47,8 @@ export interface SpawnArgs {
   engine: EngineFlag | null
   /** Explicit teammate name from `--name`; empty when the caller wants auto-gen. */
   name: string
+  /** One-line spawn subject persisted as the queryable history intent. */
+  intent: string
   resumeSid: string
   prompt: string
   hasPrompt: boolean
@@ -104,9 +109,12 @@ export function parseCompactArgs(args: readonly string[]): CompactArgs | { error
 export function parseResumeArgs(args: readonly string[]): ResumeArgs | { error: TmResult } {
   let name = ''
   let sid = ''
+  let repo = ''
   let prompt = ''
   let hasPrompt = false
   let engine: EngineFlag | null = null
+  let intent = ''
+  let id = ''
   let i = 0
   while (i < args.length) {
     const arg = args[i]!
@@ -134,6 +142,37 @@ export function parseResumeArgs(args: readonly string[]): ResumeArgs | { error: 
       }
       engine = value
       i++
+    } else if (arg === '--repo') {
+      if (i + 1 >= args.length) return { error: die('tm resume: --repo requires a value') }
+      repo = args[i + 1]!
+      i += 2
+    } else if (arg.startsWith('--repo=')) {
+      repo = arg.slice('--repo='.length)
+      i++
+    } else if (arg === '--id') {
+      if (i + 1 >= args.length) return { error: die('tm resume: --id requires a value') }
+      id = args[i + 1]!
+      i += 2
+    } else if (arg.startsWith('--id=')) {
+      id = arg.slice('--id='.length)
+      i++
+    } else if (arg === '--name') {
+      if (i + 1 >= args.length) return { error: die('tm resume: --name requires a value') }
+      name = args[i + 1]!
+      i += 2
+    } else if (arg.startsWith('--name=')) {
+      name = arg.slice('--name='.length)
+      i++
+    } else if (arg === '--intent' || arg === '--about') {
+      if (i + 1 >= args.length) return { error: die(`tm resume: ${arg} requires a value`) }
+      intent = args[i + 1]!
+      i += 2
+    } else if (arg.startsWith('--intent=')) {
+      intent = arg.slice('--intent='.length)
+      i++
+    } else if (arg.startsWith('--about=')) {
+      intent = arg.slice('--about='.length)
+      i++
     } else if (arg === '--') {
       i++
       break
@@ -154,7 +193,8 @@ export function parseResumeArgs(args: readonly string[]): ResumeArgs | { error: 
       }
     }
   }
-  return { name, sid, prompt, hasPrompt, engine }
+  if (sid === '' && id !== '') sid = id
+  return { name, sid, repo, prompt, hasPrompt, engine, intent, id }
 }
 
 /**
@@ -233,6 +273,7 @@ export function parseSendArgs(args: readonly string[]): SendArgs | { error: TmRe
 export function parseSpawnArgs(rest: readonly string[]): SpawnArgs | { error: TmResult } {
   const SILENT: TmResult = { code: 1, stdout: '', stderr: '' }
   let name = ''
+  let intent = ''
   let resumeSid = ''
   let prompt = ''
   let hasPrompt = false
@@ -266,6 +307,14 @@ export function parseSpawnArgs(rest: readonly string[]): SpawnArgs | { error: Tm
       i++
     } else if (arg.startsWith('--name=')) {
       name = arg.slice('--name='.length)
+    } else if (arg === '--intent' || arg === '--about') {
+      if (i + 1 >= rest.length) return { error: die(`tm spawn: ${arg} requires a value`) }
+      intent = rest[i + 1]!
+      i++
+    } else if (arg.startsWith('--intent=')) {
+      intent = arg.slice('--intent='.length)
+    } else if (arg.startsWith('--about=')) {
+      intent = arg.slice('--about='.length)
     } else if (arg === '--task' || arg.startsWith('--task=')) {
       return {
         error: die(
@@ -298,7 +347,7 @@ export function parseSpawnArgs(rest: readonly string[]): SpawnArgs | { error: Tm
       return { error: die(`unknown flag: ${arg}`) }
     }
   }
-  return { engine, name, resumeSid, prompt, hasPrompt, timeout, noWorktree, remoteControl }
+  return { engine, name, intent, resumeSid, prompt, hasPrompt, timeout, noWorktree, remoteControl }
 }
 
 /**

@@ -4,7 +4,7 @@
 @.workspace/imports.md
 <!-- claudemux-workspace-imports:end -->
 
-You are the **dispatcher** for this machine, running in the parent directory of several sibling git repos (your `$PWD`). This directory is a coordination workspace, not a product repo; target repo work belongs in a delegated Claude process or teammate for that repo. For dispatcher-style work, use the companion `dispatcher` skill as the operations manual for teammate coordination, cron host rules, the task ledger, and known foot-guns.
+You are the **dispatcher** for this machine, running in the parent directory of several sibling git repos (your `$PWD`). This directory is a coordination workspace, not a product repo; target repo work belongs in a delegated Claude process or teammate for that repo. For dispatcher-style work, use the companion `dispatcher` skill as the operations manual for teammate coordination, cron host rules, `tm history` lookup, and known foot-guns.
 
 Local notes from `/claudemux:optimize` live in `.claude/local-dispatcher-notes.md` (relative to this file's directory). At the start of a dispatcher session, check whether that file exists and Read it if so — it holds user-owned dispatcher conventions not yet promoted into this file or a memory entry.
 
@@ -26,15 +26,11 @@ When the user names a repo (exact or fuzzy), pass that sibling repo's absolute p
 
 Use the dispatcher skill for teammate operations. It owns the operational details and edge-case handling; keep this always-loaded file focused on routing and delegation boundaries.
 
-## Task ledger
-
-Before delegating any non-trivial work, Read the live ledger `active-dispatcher-tasks.md` in this dispatcher's Claude Code memory directory (`~/.claude/projects/<encoded-cwd>/memory/`, where `<encoded-cwd>` is this dispatcher's `$PWD` with `/` and `.` replaced by `-`; auto-loaded entries are visible via `MEMORY.md`). Append an entry at spawn; when the work merges, finishes, or its teammate dies, compress it and move it to `dispatcher-tasks-archive.md`. Full schema and update rules live in the dispatcher skill.
-
 ## Ground rules
 
 A few constraints fall out of the dispatcher running outside any single repo. The reasoning sits next to each rule so you can apply it in edge cases too, not just match the literal pattern.
 
-- **Use the dispatcher shell for routing metadata only.** Resolve the target sibling repo and record pre-dispatch facts such as `git -C <repo> branch --show-current`; the ledger needs a stable target and branch before work leaves the dispatcher.
+- **Use the dispatcher shell for routing metadata only.** Resolve the target sibling repo and record concise dispatch intent with `tm spawn --intent "..."`; tm records repo/session metadata for later `tm history` lookup.
 - **Delegate repo exploration and modification — including debugging.** Source search, file reads, tests, code edits, and chasing down a bug all belong in the repo-local worker context, so project instructions, git state, and tool output stay attached to the target repo. When something in a sibling repo looks wrong, hand the symptom to that repo's teammate; don't `grep`/`diff`/`Read` the repo's files from the dispatcher to investigate it yourself.
 - **Brief teammates with intent, not invented constraints.** Give the task and the real context, then let the teammate choose its own tools and workflow — the default is "work the way you normally would". Don't inject restrictions the user never asked for (`don't use advisor`, `don't open a branch`), and don't fabricate user decisions (`the user picked approach X`): when the request is vague, pass the vagueness to the teammate as an open question rather than resolving it yourself. The teammate can't tell an invented instruction from a real one — it follows both.
 - **Host `CronCreate` jobs in an interactive TUI REPL.** The dispatcher session and `tm`-spawned Claude tmux teammates both qualify; `claude -p` and Agent Teams subagents accept the create call and then silently never fire, so hosting cron there is how you miss your own triggers without ever noticing.

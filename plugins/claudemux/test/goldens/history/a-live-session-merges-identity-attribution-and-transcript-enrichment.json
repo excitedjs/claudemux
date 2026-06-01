@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stdout": "{\n  \"items\": [\n    {\n      \"id\": \"3c7af4d3-2e43-9c34-074a-e096a57eaf69\",\n      \"name\": \"claudemux-conftest-0642e722d335\",\n      \"state\": \"orphaned\",\n      \"intent\": \"finish the live branch\",\n      \"topic\": \"finish the live branch\",\n      \"lastAssistantPreview\": \"live answer\"\n    }\n  ],\n  \"nextCursor\": null\n}\n",
+  "stderr": ""
+}

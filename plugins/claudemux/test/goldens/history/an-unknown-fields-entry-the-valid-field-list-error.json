@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stdout": "",
+  "stderr": "tm: history: unknown field(s): nope. Valid fields: id,engine,name,repo,cwd,worktreeSlug,branch,baseRef,createdAt,createdAtSource,lastSeenAt,state,intent,closeStatus,closeNotePreview,lastAssistantPreview,resumeCommand,source,topic,path,sizeBytes\n"
+}

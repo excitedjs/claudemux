@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stdout": "{\n  \"items\": [\n    {\n      \"topic\": null,\n      \"lastAssistantPreview\": \"only an assistant turn\"\n    }\n  ],\n  \"nextCursor\": null\n}\n",
+  "stderr": ""
+}

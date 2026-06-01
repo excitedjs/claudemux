@@ -45,10 +45,10 @@ Eligible when the finding would be valuable to ALL users of the claudemux plugin
 The default storage for findings that are too **situational** to be a CLAUDE.md rule, too **dispatcher-internal** to belong in a sibling repo, and too **standalone** to fold into the dispatcher skill. Examples:
 
 - "User prefers driving teammates directly via RC; dispatcher should not relay"
-- "active-dispatcher-tasks.md is the live ledger location — read it on boot"
+- "Use `tm history --repo <repo>` to recover prior teammate sessions"
 - "Project acme-app is in Spike 1 phase; artifacts X, Y"
 
-Memory writes are **auto-applied** (no user confirmation) for: new files, additions to existing files, and routine cleanups (broken links, archiving stale "Active" ledger entries). Deletions of an entire memory file require user confirmation.
+Memory writes are **auto-applied** (no user confirmation) for: new files, additions to existing files, and routine cleanups such as broken links. Deletions of an entire memory file require user confirmation.
 
 Always update `MEMORY.md` (the index) when adding or removing files; never write content directly into `MEMORY.md`.
 
@@ -79,6 +79,6 @@ Global promotion (machine-wide CLAUDE.md / global skills) is intentionally out o
 
 - A memory directly related to the dispatcher skill is sitting in `memory/` instead of in the local notes → absorb into notes, delete the original.
 - Two near-duplicate memories about the same convention → merge into one.
-- An "Active" ledger entry whose teammate session no longer exists → archive it (compress + move to `dispatcher-tasks-archive.md`) or mark stale.
+- A remembered teammate session whose process no longer exists → query `tm history --repo <repo>` / `tm history --id <prefix>` and update local notes only if the finding is still useful.
 - A foot-gun bullet repeated across multiple memories → promote to a single line in the local notes file's "Common foot-guns" section.
 - Attempting to edit a file under `${CLAUDE_PLUGIN_ROOT}` → that's read-only; either propose the change for upstream or add to local notes instead.

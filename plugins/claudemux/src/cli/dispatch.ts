@@ -3,7 +3,6 @@ import { pluginJsonPath, tmWrapperPath } from '../plugin-root'
 import type { TmResult } from '../tm'
 import type { NativeEnv } from '../env'
 import type { Engine } from '../engines/engine'
-import { archiveVerb } from '../verbs/archive'
 import { askVerb } from '../verbs/ask'
 import { pollVerb } from '../verbs/poll'
 import type { VerbContext } from '../verbs/context'
@@ -18,7 +17,8 @@ import { compactVerb } from '../verbs/compact'
 import { resumeVerb } from '../verbs/resume'
 import { lastVerb } from '../verbs/last'
 import { ctxVerb } from '../verbs/ctx'
-import { historyVerb } from '../verbs/history'
+import { historyVerb, parseHistoryArgs } from '../verbs/history'
+import { resolveHistoryId } from '../verbs/history-query'
 import { memVerb } from '../verbs/mem'
 import { reloadVerb } from '../verbs/reload'
 import { claudeDoctor } from '../engines/claude/doctor'
@@ -51,6 +51,12 @@ import {
   read as readIdentity,
   readArchived as readArchivedIdentity,
 } from '../persistence/identity-store'
+import { gitBaseRefNote } from '../engines/claude/base-ref'
+import { worktreeBranchFor } from '../persistence/paths'
+import {
+  recordHistoryClose,
+  type HistoryCloseStatus,
+} from '../persistence/history-index'
 import { validateTeammateName } from '../identity/name'
 
 interface FleetTarget {
@@ -75,6 +81,11 @@ async function fleetTargets(ctx: VerbContext): Promise<TmResult | FleetTarget[]>
     targets.push(target)
   }
   return targets
+}
+
+async function fleetListings(ctx: VerbContext) {
+  return (await Promise.all(ctx.engines.registered().map((engine) => engine.list(ctx.engineContext))))
+    .flatMap((rows) => rows)
 }
 
 async function combineResults(results: readonly Promise<TmResult>[]): Promise<TmResult> {
@@ -105,6 +116,68 @@ function parseFleetListFlags(
     else return { error: die(`tm ${verb}: unexpected argument '${arg}'. Usage: tm ${verb} [--all]`) }
   }
   return { all }
+}
+
+type KillArgs =
+  | { readonly name: string; readonly id: null; readonly status: HistoryCloseStatus | null; readonly note: string | null }
+  | { readonly name: null; readonly id: string; readonly status: HistoryCloseStatus; readonly note: string | null }
+  | { readonly error: TmResult }
+
+function parseKillStatus(value: string): HistoryCloseStatus | TmResult {
+  if (
+    value === 'merged' ||
+    value === 'done' ||
+    value === 'shelved' ||
+    value === 'abandoned' ||
+    value === 'blocked'
+  ) return value
+  return die(`tm kill: --status must be one of merged,done,shelved,abandoned,blocked (got: '${value}')`)
+}
+
+function parseKillArgs(rest: readonly string[]): KillArgs {
+  let name = ''
+  let id = ''
+  let status: HistoryCloseStatus | null = null
+  let note: string | null = null
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i]!
+    if (arg === '--id') {
+      if (i + 1 >= rest.length) return { error: die('tm kill: --id requires a value') }
+      id = rest[i + 1]!
+      i++
+    } else if (arg.startsWith('--id=')) {
+      id = arg.slice('--id='.length)
+    } else if (arg === '--status') {
+      if (i + 1 >= rest.length) return { error: die('tm kill: --status requires a value') }
+      const parsed = parseKillStatus(rest[i + 1]!)
+      if (typeof parsed !== 'string') return { error: parsed }
+      status = parsed
+      i++
+    } else if (arg.startsWith('--status=')) {
+      const parsed = parseKillStatus(arg.slice('--status='.length))
+      if (typeof parsed !== 'string') return { error: parsed }
+      status = parsed
+    } else if (arg === '--note') {
+      if (i + 1 >= rest.length) return { error: die('tm kill: --note requires a value') }
+      note = rest[i + 1]!
+      i++
+    } else if (arg.startsWith('--note=')) {
+      note = arg.slice('--note='.length)
+    } else if (arg.startsWith('-')) {
+      return { error: die(`tm kill: unknown flag: ${arg}`) }
+    } else if (name === '') {
+      name = arg
+    } else {
+      return { error: die(`tm kill: unexpected argument '${arg}'`) }
+    }
+  }
+  if (id !== '') {
+    if (name !== '') return { error: die('tm kill: --id cannot be combined with <name>') }
+    if (status === null) return { error: die('tm kill: --id requires --status') }
+    return { name: null, id, status, note }
+  }
+  if (name === '') return { error: die('usage: tm kill <name> [--status <s>] [--note <text>]') }
+  return { name, id: null, status, note }
 }
 
 // ─── Engine-routed teammate verbs ─────────────────────────────────────────
@@ -155,14 +228,34 @@ async function dispatchEngineVerb(
       return statusVerb(rest[0]!, ctx, { lines: linesArg })
     }
     case 'kill': {
-      if (rest.length === 0) return { code: 1, stdout: '', stderr: 'tm: usage: tm kill <name>\n' }
+      const parsed = parseKillArgs(rest)
+      if ('error' in parsed) return parsed.error
+      if (parsed.id !== null) {
+        const resolved = resolveHistoryId(parsed.id, await fleetListings(ctx), env)
+        if (resolved.kind === 'ambiguous') {
+          return die(`tm kill: id prefix '${parsed.id}' is ambiguous: ${resolved.ids.join(' ')}`)
+        }
+        if (resolved.kind === 'not-found') {
+          return die(`tm kill: no history session matching id '${parsed.id}'`)
+        }
+        recordHistoryClose({
+          id: resolved.row.id,
+          engine: resolved.row.engine,
+          name: resolved.row.name,
+          repo: resolved.row.repo,
+          cwd: resolved.row.cwd,
+          status: parsed.status,
+          note: parsed.note,
+        })
+        return { code: 0, stdout: `closed: ${resolved.row.id} [${parsed.status}]\n`, stderr: '' }
+      }
       // No `legacySchemaError` guard here on purpose: the migration
       // message for a schema=1 record is literally "run `tm kill`",
       // so this verb must be reachable on a legacy record. The
       // claude engine's `kill()` cleans tmux + the bash-side marker
       // files unconditionally, and `ctx.identity.remove(name)`
       // sweeps the JSON regardless of its on-disk schema version.
-      return killVerb(rest[0]!, ctx)
+      return killVerb(parsed.name, ctx, { status: parsed.status, note: parsed.note })
     }
     case 'spawn': {
       const rawPath = rest[0] ?? ''
@@ -194,6 +287,7 @@ async function dispatchEngineVerb(
       if ('error' in rc) return rc.error
       const worktreeSlug = parsed.noWorktree ? null : name
       const cwd = spawnCwdFor(repo, worktreeSlug)
+      const intent = parsed.intent.length > 0 ? parsed.intent : null
       return spawnVerb(
         {
           name,
@@ -204,7 +298,9 @@ async function dispatchEngineVerb(
           resumeCheckpoint: parsed.resumeSid.length === 0 ? null : parsed.resumeSid,
           prompt: parsed.hasPrompt ? parsed.prompt : null,
           timeoutMs,
-          displayName: null,
+          displayName: intent,
+          baseRef: await gitBaseRefNote(repo),
+          branch: worktreeSlug === null ? null : worktreeBranchFor(worktreeSlug),
           remoteControl: rc.remoteControl,
         },
         ctx,
@@ -272,37 +368,69 @@ async function dispatchEngineVerb(
     case 'resume': {
       const parsed = parseResumeArgs(rest)
       if ('error' in parsed) return parsed.error
-      if (parsed.name === '') {
+      let name = parsed.name
+      let checkpoint = parsed.sid.length === 0 ? null : parsed.sid
+      let engineHint = parsed.engine
+      let repoOverride: string | null = null
+      let cwdOverride: string | null = null
+      let worktreeSlugOverride: string | null | undefined
+      let displayNameOverride: string | null | undefined =
+        parsed.intent.length > 0 ? parsed.intent : undefined
+
+      if (checkpoint !== null) {
+        const resolved = resolveHistoryId(checkpoint, await fleetListings(ctx), env)
+        if (resolved.kind === 'ambiguous') {
+          return die(`tm resume: id prefix '${checkpoint}' is ambiguous: ${resolved.ids.join(' ')}`)
+        }
+        if (resolved.kind === 'found') {
+          checkpoint = resolved.row.id
+          engineHint = engineHint ?? resolved.row.engine
+          repoOverride = resolved.row.repo ?? resolved.row.cwd
+          cwdOverride = resolved.row.cwd
+          worktreeSlugOverride = resolved.row.worktreeSlug
+          if (name === '' && resolved.row.name !== null) name = resolved.row.name
+          displayNameOverride = displayNameOverride ?? resolved.row.intent
+        }
+      }
+
+      if (parsed.repo.length > 0) {
+        const repoResolved = resolveRepoPath(parsed.repo, env, 'tm resume')
+        if ('error' in repoResolved) return repoResolved.error
+        repoOverride = repoResolved.repo
+        cwdOverride = cwdOverride ?? repoResolved.repo
+      }
+
+      if (name === '' && repoOverride !== null) name = autoGenerateName(repoOverride)
+      if (name === '') {
         return die(
           'usage: tm resume <name> [<sid-or-thread-id>] [--prompt "..."] ' +
-            '[--engine claude|codex]  (id may be omitted: claudemux probes both engines ' +
+            '[--engine claude|codex]  OR  tm resume --engine <claude|codex> ' +
+            '--repo <path> --id <sid-or-thread-id> [--name <fresh>] [--intent "..."] ' +
+            '(id may be omitted in the name form: claudemux probes both engines ' +
             'for a resumable session and routes the single candidate; if both engines have ' +
             'history, use --engine to disambiguate)',
         )
       }
-      const legacy = legacySchemaError(parsed.name, 'resume')
+      const validation = validateTeammateName(name)
+      if (validation.kind !== 'ok') {
+        return die(`tm resume: invalid name '${name}': ${validation.reason}`)
+      }
+      const legacy = legacySchemaError(name, 'resume')
       if (legacy !== null) return legacy
-      // After a clean kill the live identity is gone, but the archive
-      // snapshot — written by `tm kill` before the live record was
-      // deleted — still carries the launch context (repo /
-      // worktreeSlug / displayName). Fall back to it so the resume
-      // verb has the same `repo` / `worktreeSlug` it would have had
-      // pre-kill; without that, `tm resume <name> <sid>` after a
-      // clean kill cannot re-provision the worktree.
-      const liveIdentity = readIdentity(parsed.name)
-      const recordSource = liveIdentity ?? readArchivedIdentity(parsed.name)
+      const liveIdentity = readIdentity(name)
+      const recordSource = liveIdentity ?? readArchivedIdentity(name)
       return resumeVerb(
         {
-          name: parsed.name,
-          repo: recordSource?.repo ?? null,
-          cwd: cwdForName(parsed.name, env),
-          worktreeSlug: recordSource?.worktreeSlug ?? null,
-          checkpoint: parsed.sid.length === 0 ? null : parsed.sid,
+          name,
+          repo: repoOverride ?? recordSource?.repo ?? null,
+          cwd: cwdOverride ?? cwdForName(name, env),
+          worktreeSlug: worktreeSlugOverride ?? recordSource?.worktreeSlug ?? null,
+          checkpoint,
           prompt: parsed.hasPrompt ? parsed.prompt : null,
-          displayName: recordSource?.displayName ?? null,
-          engineHint: parsed.engine,
+          displayName: displayNameOverride ?? recordSource?.displayName ?? null,
+          engineHint,
           projectsDir: env.projectsDir,
-          cwdProbeable: resumeCwdProbeable(parsed.name, env),
+          cwdProbeable: cwdOverride !== null || repoOverride !== null || resumeCwdProbeable(name, env),
         },
         ctx,
       )
@@ -352,11 +480,9 @@ async function dispatchEngineVerb(
       return combineResults(results)
     }
     case 'history': {
-      const name = rest[0] ?? ''
-      if (name.length === 0) return die('usage: tm history <name> [<sid-or-thread-prefix>]')
-      const legacy = legacySchemaError(name, 'history')
-      if (legacy !== null) return legacy
-      return historyVerb({ name, cwd: cwdForName(name, env), index: rest[1] ?? null }, ctx)
+      const parsed = parseHistoryArgs(rest)
+      if ('error' in parsed) return parsed.error
+      return historyVerb(parsed, ctx, env)
     }
     case 'mem': {
       const name = rest[0] ?? ''
@@ -422,7 +548,7 @@ async function doctorDispatch(args: readonly string[], env: NativeEnv): Promise<
 export async function runCli(
   argv: readonly string[],
   env: NativeEnv,
-  stdin?: string,
+  _stdin?: string,
 ): Promise<TmResult> {
   const [verb, ...rest] = argv
   // 1. Bare `tm` (or `tm ""`, mirroring bash `${1:-help}` which fires
@@ -458,11 +584,6 @@ export async function runCli(
 
   // 6. Dispatcher-only / diagnostic verbs.
   switch (verb) {
-    case 'archive':
-      return archiveVerb(rest, stdin, {
-        dispatcherDir: env.dispatcherDir,
-        projectsDir: env.projectsDir,
-      })
     case 'doctor':
       return doctorDispatch(rest, env)
     case 'poll':

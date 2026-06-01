@@ -45,7 +45,9 @@ behavior from memory or this doc.
   and the post-turn ctx echo go to **stderr**. This stdout/stderr split is
   deliberate — see [decision atomic-tm-verbs](/.agents/decisions/atomic-tm-verbs.md).
 - **Read-only / fast verbs** — `ls`, `states`, `last`, `ctx`, `history`,
-  `mem`, `doctor`, `kill`, `reload`, `archive`. Sub-second; safe foreground.
+  `mem`, `doctor`, `kill`, `reload`. Sub-second; safe foreground. `history`
+  defaults to bounded JSON and should be paged with `--limit` / `--cursor`
+  for broad scans.
 - **Diagnostic verbs** — `status` (capture the live pane), `poll` (regex-poll
   intermediate pane state). Used when the atomic verbs do not fit.
 
@@ -105,6 +107,14 @@ protocol. Each has its own decision record — see
   This is what keeps a killed session discoverable and resumable by name
   without scraping `/tmp` by hand; a name that is live again shadows its
   stale archive row.
+- `tm history` is the dispatcher ledger replacement. It is flag-only (no
+  `tm history <name>` compatibility), merges the forward history index with
+  transcripts/rollouts, and emits `resumeCommand` for rows that can be
+  resumed. The index starts empty and never reads old Markdown ledger files.
+- `tm kill <name> --status <merged|done|shelved|abandoned|blocked>
+  [--note <text>]` records queryable close metadata for `tm history
+  --status ...`; `tm kill --id <full-or-prefix> --status ...` records close
+  metadata for already-dead sessions without stopping a process.
 - `tm spawn` prints a `base:` line on a fresh launch — the repo HEAD branch
   + short sha the worktree branches from, plus a best-effort ahead/behind
   against the remote default branch — so a repo parked on a non-trunk

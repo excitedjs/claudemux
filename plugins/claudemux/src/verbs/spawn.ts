@@ -11,6 +11,8 @@
  * live.
  */
 
+import { readFileSync } from 'node:fs'
+
 import { noEngineRegistered } from './format'
 import type {
   EngineKind,
@@ -20,6 +22,9 @@ import type {
 } from '../engines/types'
 import type { TmResult } from '../tm'
 import type { VerbContext } from './context'
+import { recordHistorySession } from '../persistence/history-index'
+import { sidFile, worktreeBranchFor } from '../persistence/paths'
+import { codexThreadFile } from '../engines/codex/persistence'
 
 export interface SpawnArgs {
   readonly name: TeammateName
@@ -31,8 +36,23 @@ export interface SpawnArgs {
   readonly prompt: string | null
   readonly timeoutMs: number | null
   readonly displayName: string | null
+  readonly baseRef: string | null
+  readonly branch: string | null
   /** Resolved Remote Control opt-in (Claude-only; see SpawnRequest). */
   readonly remoteControl: boolean
+}
+
+function readMarker(path: string): string | null {
+  try {
+    const value = readFileSync(path, 'utf8').trim()
+    return value.length > 0 ? value : null
+  } catch {
+    return null
+  }
+}
+
+function sessionIdFor(engine: EngineKind, name: string): string | null {
+  return engine === 'codex' ? readMarker(codexThreadFile(name)) : readMarker(sidFile(name))
 }
 
 export async function spawnVerb(args: SpawnArgs, ctx: VerbContext): Promise<TmResult> {
@@ -58,6 +78,20 @@ export async function spawnVerb(args: SpawnArgs, ctx: VerbContext): Promise<TmRe
     remoteControl: args.remoteControl,
   }
   const result: SpawnResult = await engine.spawn(req, ctx.engineContext)
+  if (result.kind === 'spawned') {
+    recordHistorySession({
+      id: sessionIdFor(args.engine, args.name),
+      engine: args.engine,
+      name: args.name,
+      repo: args.repo,
+      cwd: args.cwd,
+      worktreeSlug: args.worktreeSlug,
+      branch: args.branch ?? (args.worktreeSlug === null ? null : worktreeBranchFor(args.worktreeSlug)),
+      baseRef: args.baseRef,
+      createdAt: new Date(ctx.engineContext.now()).toISOString(),
+      intent: args.displayName,
+    })
+  }
   if (result.tmResult !== undefined) {
     return result.tmResult
   }

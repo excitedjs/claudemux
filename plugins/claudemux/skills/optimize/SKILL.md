@@ -188,4 +188,4 @@ Recurring `CronCreate` jobs auto-expire after 7 days. If you want this running i
 
 `/claudemux:optimize` works as a one-shot manual run too — the user can ask anytime. Same flow, no behavioral difference between manual and cron-triggered.
 
-When asked to do a partial run (e.g., "only review the last 24 hours" or "only look at task ledger drift"), narrow step 1's `days` arg or skip irrelevant axes in step 3 — the rest of the flow is unchanged.
+When asked to do a partial run (e.g., "only review the last 24 hours" or "only look at teammate history drift"), narrow step 1's `days` arg or skip irrelevant axes in step 3 — the rest of the flow is unchanged.
