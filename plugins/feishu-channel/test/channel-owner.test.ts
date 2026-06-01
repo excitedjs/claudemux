@@ -14,7 +14,8 @@ function fakeConn(session: RegisteredSession): DaemonConnection {
 const session = (
   sessionId: string,
   role: RegisteredSession['role'],
-): RegisteredSession => ({ sessionId, pid: 1, proxyVersion: '0', role })
+  metadata: Record<string, string> = {},
+): RegisteredSession => ({ sessionId, pid: 1, proxyVersion: '0', role, metadata })
 
 function text(result: unknown): string {
   return ((result as { content: Array<{ text: string }> }).content[0]?.text ?? '')
@@ -159,5 +160,142 @@ describe('ChannelOwnerState', () => {
 
     expect(status.handled).toBe(true)
     if (status.handled) expect(text(status.result)).toContain('"lease_epoch": 2')
+  })
+
+  test('status surfaces each session metadata verbatim', async () => {
+    const owner = new ChannelOwnerState()
+    const dispatcher = fakeConn(session('dispatcher-1', 'dispatcher', { cwd: '/ws' }))
+    const tm = fakeConn(session('tm-1', 'session', { cwd: '/ws/api', teammate_name: 'api-worker' }))
+    owner.register(dispatcher)
+
+    const status = await owner.handleTool(dispatcher, 'feishu_channel_status', {}, new Set([dispatcher, tm]))
+
+    expect(status.handled).toBe(true)
+    if (status.handled) {
+      expect(text(status.result)).toContain('"teammate_name": "api-worker"')
+      expect(text(status.result)).toContain('"cwd": "/ws/api"')
+    }
+  })
+
+  test('dispatcher assigns ownership by metadata match', async () => {
+    const owner = new ChannelOwnerState()
+    const dispatcher = fakeConn(session('dispatcher-1', 'dispatcher'))
+    const tm = fakeConn(session('tm-1', 'session', { teammate_name: 'api-worker' }))
+    const conns = new Set([dispatcher, tm])
+    owner.register(dispatcher)
+
+    const result = await owner.handleTool(
+      dispatcher,
+      'feishu_channel_acquire',
+      { match: { teammate_name: 'api-worker' } },
+      conns,
+    )
+
+    expect(result.handled).toBe(true)
+    if (result.handled) expect(text(result.result)).toContain('tm-1')
+    expect(owner.select(conns)).toBe(tm)
+  })
+
+  test('dispatcher grants by metadata match', async () => {
+    const owner = new ChannelOwnerState()
+    const dispatcher = fakeConn(session('dispatcher-1', 'dispatcher'))
+    const tm = fakeConn(session('tm-1', 'session', { teammate_name: 'api-worker' }))
+    const conns = new Set([dispatcher, tm])
+    owner.register(dispatcher)
+
+    const granted = await owner.handleTool(
+      dispatcher,
+      'feishu_channel_grant',
+      { match: { teammate_name: 'api-worker' } },
+      conns,
+    )
+    expect(granted.handled).toBe(true)
+    if (granted.handled) expect(text(granted.result)).toContain('tm-1')
+
+    const acquired = await owner.handleTool(tm, 'feishu_channel_acquire', {}, conns)
+    expect(owner.select(conns)).toBe(tm)
+    expect(acquired.handled).toBe(true)
+  })
+
+  test('a metadata match with no live session is an error', async () => {
+    const owner = new ChannelOwnerState()
+    const dispatcher = fakeConn(session('dispatcher-1', 'dispatcher'))
+    const tm = fakeConn(session('tm-1', 'session', { teammate_name: 'api-worker' }))
+    const conns = new Set([dispatcher, tm])
+    owner.register(dispatcher)
+
+    const result = await owner.handleTool(
+      dispatcher,
+      'feishu_channel_acquire',
+      { match: { teammate_name: 'ghost' } },
+      conns,
+    )
+
+    expect(result.handled).toBe(true)
+    if (result.handled) {
+      expect(result.result.isError).toBe(true)
+      expect(text(result.result)).toContain('no live channel proxy matching')
+    }
+    expect(owner.select(conns)).toBe(dispatcher)
+  })
+
+  test('an ambiguous metadata match lists candidates and is an error', async () => {
+    const owner = new ChannelOwnerState()
+    const dispatcher = fakeConn(session('dispatcher-1', 'dispatcher'))
+    const tmA = fakeConn(session('tm-a', 'session', { teammate_name: 'twin' }))
+    const tmB = fakeConn(session('tm-b', 'session', { teammate_name: 'twin' }))
+    const conns = new Set([dispatcher, tmA, tmB])
+    owner.register(dispatcher)
+
+    const result = await owner.handleTool(
+      dispatcher,
+      'feishu_channel_grant',
+      { match: { teammate_name: 'twin' } },
+      conns,
+    )
+
+    expect(result.handled).toBe(true)
+    if (result.handled) {
+      expect(result.result.isError).toBe(true)
+      expect(text(result.result)).toContain('ambiguous match')
+      expect(text(result.result)).toContain('tm-a')
+      expect(text(result.result)).toContain('tm-b')
+    }
+  })
+
+  test('passing both session_id and match is an error', async () => {
+    const owner = new ChannelOwnerState()
+    const dispatcher = fakeConn(session('dispatcher-1', 'dispatcher'))
+    const tm = fakeConn(session('tm-1', 'session', { teammate_name: 'api-worker' }))
+    const conns = new Set([dispatcher, tm])
+    owner.register(dispatcher)
+
+    const result = await owner.handleTool(
+      dispatcher,
+      'feishu_channel_acquire',
+      { session_id: 'tm-1', match: { teammate_name: 'api-worker' } },
+      conns,
+    )
+
+    expect(result.handled).toBe(true)
+    if (result.handled) {
+      expect(result.result.isError).toBe(true)
+      expect(text(result.result)).toContain('pass only one of session_id / match')
+    }
+  })
+
+  test('grant with neither session_id nor match is an error', async () => {
+    const owner = new ChannelOwnerState()
+    const dispatcher = fakeConn(session('dispatcher-1', 'dispatcher'))
+    const conns = new Set([dispatcher])
+    owner.register(dispatcher)
+
+    const result = await owner.handleTool(dispatcher, 'feishu_channel_grant', {}, conns)
+
+    expect(result.handled).toBe(true)
+    if (result.handled) {
+      expect(result.result.isError).toBe(true)
+      expect(text(result.result)).toContain('session_id or match is required')
+    }
   })
 })

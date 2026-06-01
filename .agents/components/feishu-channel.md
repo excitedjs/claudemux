@@ -143,6 +143,20 @@ so it unit-tests without a running server or connection.
   The `feishu_list_chat_bots` MCP tool re-queries the local discovery store
   after compaction. See
   [decision feishu-channel-bot-discovery](/.agents/decisions/feishu-channel-bot-discovery.md).
+- **A proxy self-reports an opaque identity `metadata` bag at `register`**, kept
+  on `RegisteredSession` and surfaced verbatim in
+  `feishu_channel_status().sessions[]`, so a coordinator locates a session by a
+  readable key instead of from `pid`. The channel core never interprets a
+  metadata key — keys are a convention, not schema, which keeps the wire type
+  orchestrator-neutral for a feishu-only install. `deriveProxyMetadata` in
+  `src/server.ts` composes two contributors: a neutral `cwd` from
+  `CLAUDE_PROJECT_DIR` (a Claude Code standard), and `claudemuxIdentityFromEnv`
+  — the single named seam that reads claudemux's `CLAUDEMUX_TEAMMATE_NAME` env
+  into `metadata.teammate_name` (best-effort: absent for the dispatcher and for
+  non-claudemux sessions, so it adds no dependency on claudemux). The ownership
+  tools `feishu_channel_acquire` / `feishu_channel_grant` take a neutral `match`
+  selector (subset-equality over `metadata`) resolved in `channel-owner.ts`;
+  internal ownership is still stored by opaque `sessionId`.
 
 ## See also
 

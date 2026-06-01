@@ -64,6 +64,7 @@ describe('daemon/proxy over a real unix socket', () => {
       pid: 4321,
       proxyVersion: '0.2.1',
       role: 'dispatcher',
+      metadata: {},
     })
 
     // tool call: proxy -> socket -> daemon core -> result -> socket -> proxy

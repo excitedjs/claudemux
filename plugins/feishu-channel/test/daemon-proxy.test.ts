@@ -15,6 +15,7 @@ function connect(opts: {
   deliverToClaude(content: string, meta: Record<string, string>): Promise<void>
   onAck?(eventId: string): void
   role?: 'dispatcher' | 'session'
+  metadata?: Record<string, string>
   handleOwnershipTool?: Parameters<typeof createDaemonConnection>[0]['handleOwnershipTool']
 }) {
   const queue: Array<['proxy', DaemonToProxy] | ['daemon', ProxyToDaemon]> = []
@@ -32,6 +33,7 @@ function connect(opts: {
     pid: 999,
     proxyVersion: '0.2.1',
     role: opts.role ?? 'session',
+    metadata: opts.metadata,
     deliverToClaude: opts.deliverToClaude,
     send: (m) => queue.push(['daemon', m]),
   })
@@ -60,7 +62,19 @@ describe('daemon <-> proxy protocol', () => {
       pid: 999,
       proxyVersion: '0.2.1',
       role: 'session',
+      metadata: {},
     })
+  })
+
+  test('the proxy self-reported identity metadata reaches the daemon session', async () => {
+    const { daemonConn, proxyClient, pump } = connect({
+      core: { handleTool: async () => ({}) },
+      deliverToClaude: async () => {},
+      metadata: { teammate_name: 'api-worker', cwd: '/ws/api' },
+    })
+    proxyClient.register()
+    await pump()
+    expect(daemonConn.session?.metadata).toEqual({ teammate_name: 'api-worker', cwd: '/ws/api' })
   })
 
   test('forwards a tool call and returns the daemon-run result', async () => {

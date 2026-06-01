@@ -21,7 +21,7 @@ function fakeConn(session: RegisteredSession | null) {
 const sess = (
   sessionId: string,
   role: RegisteredSession['role'] = 'session',
-): RegisteredSession => ({ sessionId, pid: 1, proxyVersion: '0', role })
+): RegisteredSession => ({ sessionId, pid: 1, proxyVersion: '0', role, metadata: {} })
 
 describe('selectPrimary', () => {
   test('returns the first ordinary session when no dispatcher is online', () => {

@@ -21,6 +21,8 @@ export interface ProxyClientDeps {
   pid: number
   proxyVersion: string
   role: 'dispatcher' | 'session'
+  /** Source-specific identity reported in `register` (opaque to the daemon). */
+  metadata?: Record<string, string>
   /** Write one message to the daemon (the framed socket write). */
   send(message: ProxyToDaemon): void
   /**
@@ -62,6 +64,7 @@ export function createProxyClient(deps: ProxyClientDeps): ProxyClient {
         pid: deps.pid,
         proxyVersion: deps.proxyVersion,
         role: deps.role,
+        ...(deps.metadata && Object.keys(deps.metadata).length > 0 ? { metadata: deps.metadata } : {}),
       })
     },
 

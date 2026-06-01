@@ -34,6 +34,8 @@ export interface StartProxyDeps {
   pid: number
   proxyVersion: string
   role: 'dispatcher' | 'session'
+  /** Source-specific identity to self-report at `register` (opaque to the daemon). */
+  metadata?: Record<string, string>
   /** The MCP server to wire (real `createMcpServer()` or a test fake). */
   mcpServer: ProxyMcpServer
   logError?(message: string, err?: unknown): void
@@ -54,6 +56,7 @@ export async function startProxy(deps: StartProxyDeps): Promise<ProxyHandle> {
     pid: deps.pid,
     proxyVersion: deps.proxyVersion,
     role: deps.role,
+    metadata: deps.metadata,
     logError: deps.logError,
     deliverToClaude: async (content, meta) => {
       await deps.mcpServer.notification(channelNotification(content, meta))

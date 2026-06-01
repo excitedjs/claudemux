@@ -5,7 +5,14 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 
 import { startDaemonServer, type DaemonServer } from '../src/daemon-server'
 import { startProxy, type ProxyHandle, type ProxyMcpServer } from '../src/proxy'
-import { CHANNEL_TOOLS, channelNotification, connectProxyOrSpawnDaemon, stableProxySessionId } from '../src/server'
+import {
+  CHANNEL_TOOLS,
+  channelNotification,
+  claudemuxIdentityFromEnv,
+  connectProxyOrSpawnDaemon,
+  deriveProxyMetadata,
+  stableProxySessionId,
+} from '../src/server'
 import { CHANNEL_OWNER_TOOLS } from '../src/channel-owner'
 
 async function waitFor(pred: () => boolean, ms = 1000): Promise<void> {
@@ -162,5 +169,39 @@ describe('stableProxySessionId', () => {
     expect(stableProxySessionId('session', pluginRoot, { INIT_CWD: '/tmp/repo-a' })).not.toBe(
       stableProxySessionId('session', pluginRoot, { INIT_CWD: '/tmp/repo-b' }),
     )
+  })
+})
+
+describe('deriveProxyMetadata', () => {
+  test('reports the claudemux teammate name and project cwd', () => {
+    const meta = deriveProxyMetadata({
+      CLAUDEMUX_TEAMMATE_NAME: 'api-worker',
+      CLAUDE_PROJECT_DIR: '/nonexistent-ws/api',
+    })
+    expect(meta).toEqual({ teammate_name: 'api-worker', cwd: '/nonexistent-ws/api' })
+  })
+
+  test('omits teammate_name for a session without the claudemux env (e.g. the dispatcher)', () => {
+    const meta = deriveProxyMetadata({ CLAUDE_PROJECT_DIR: '/nonexistent-ws' })
+    expect(meta).toEqual({ cwd: '/nonexistent-ws' })
+  })
+
+  test('prefers CLAUDE_PROJECT_DIR over INIT_CWD and never uses process.cwd', () => {
+    const meta = deriveProxyMetadata({
+      CLAUDE_PROJECT_DIR: '/nonexistent-ws/project',
+      INIT_CWD: '/nonexistent-ws/npm',
+    })
+    expect(meta.cwd).toBe('/nonexistent-ws/project')
+  })
+
+  test('is an empty bag when no identity env is present', () => {
+    expect(deriveProxyMetadata({})).toEqual({})
+  })
+
+  test('rejects a malformed teammate name', () => {
+    expect(claudemuxIdentityFromEnv({ CLAUDEMUX_TEAMMATE_NAME: 'bad name/with spaces' })).toEqual({})
+    expect(claudemuxIdentityFromEnv({ CLAUDEMUX_TEAMMATE_NAME: 'ok-name_1' })).toEqual({
+      teammate_name: 'ok-name_1',
+    })
   })
 })

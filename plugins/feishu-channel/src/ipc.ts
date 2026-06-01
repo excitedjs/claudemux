@@ -18,6 +18,15 @@ export type ProxyToDaemon =
       pid: number
       proxyVersion: string
       role: 'dispatcher' | 'session'
+      /**
+       * Source-specific identity the proxy self-reports so a coordinator can
+       * locate this session by something readable (e.g. a teammate name)
+       * instead of reverse-engineering it from `pid`. The channel core treats
+       * these as opaque string pairs and never interprets a key; an orchestrator
+       * such as claudemux populates well-known keys (`cwd`, `teammate_name`).
+       * Optional and additive: an older proxy omits it, an older daemon ignores it.
+       */
+      metadata?: Record<string, string>
     }
   /** Forward an MCP tool call (reply / react / edit_message) for the daemon to run. */
   | { t: 'tool'; id: number; name: string; args: Record<string, unknown> }

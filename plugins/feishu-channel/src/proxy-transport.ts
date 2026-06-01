@@ -18,6 +18,8 @@ export interface ProxyConnectionDeps {
   pid: number
   proxyVersion: string
   role: 'dispatcher' | 'session'
+  /** Source-specific identity reported in `register` (opaque to the daemon). */
+  metadata?: Record<string, string>
   /** Writes a delivered event to Claude (the MCP notification); resolves on write. */
   deliverToClaude(content: string, meta: Record<string, string>): Promise<void>
   logError?(message: string, err?: unknown): void
@@ -41,6 +43,7 @@ export function connectToDaemon(deps: ProxyConnectionDeps): Promise<ProxyConnect
       pid: deps.pid,
       proxyVersion: deps.proxyVersion,
       role: deps.role,
+      metadata: deps.metadata,
       deliverToClaude: deps.deliverToClaude,
       logError,
       send: (message) => {

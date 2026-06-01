@@ -44,6 +44,12 @@ export interface RegisteredSession {
   pid: number
   proxyVersion: string
   role: 'dispatcher' | 'session'
+  /**
+   * Source-specific identity the proxy self-reported at `register`, surfaced
+   * verbatim in `feishu_channel_status` so a coordinator can locate the session
+   * by a readable key (e.g. `teammate_name`). Opaque to the channel core.
+   */
+  metadata: Record<string, string>
 }
 
 export interface DaemonConnection {
@@ -79,6 +85,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             pid: message.pid,
             proxyVersion: message.proxyVersion,
             role: message.role,
+            metadata: message.metadata ?? {},
           }
           deps.onRegister?.(conn)
           return

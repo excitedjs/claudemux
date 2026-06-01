@@ -60,7 +60,19 @@ Read these fields:
   right now; `null` means inbound rows stay pending.
 - `lease_epoch` — increments on real ownership transitions. Use it to confirm
   a handoff or return actually happened.
-- `sessions` — live proxy sessions and their roles.
+- `sessions` — live proxy sessions. Each carries `sessionId`, `pid`,
+  `proxyVersion`, `role`, and a `metadata` bag the proxy self-reported at
+  registration. The channel treats `metadata` as opaque string pairs; an
+  orchestrator fills well-known keys. A claudemux teammate reports
+  `metadata.teammate_name` (its `tm` name) and `metadata.cwd`, so you locate a
+  teammate by name without reverse-engineering it from `pid`:
+
+  ```text
+  feishu_channel_status().sessions.find(s => s.metadata?.teammate_name === "<name>")
+  ```
+
+  The dispatcher's own session has no `teammate_name`; a non-claudemux session
+  may carry only `cwd` or an empty bag.
 
 If `owner_session_id` names an offline teammate and
 `effective_target_session_id` is `null`, messages are not lost. They stay in
@@ -68,14 +80,18 @@ the daemon queue until the owner returns or the Dispatcher reclaims ownership.
 
 ## Dispatcher hands the channel to a teammate
 
-Preferred direct transfer:
+Preferred direct transfer — target the teammate by name:
 
 ```text
-feishu_channel_acquire({ "session_id": "<tm-session-id>" })
+feishu_channel_acquire({ "match": { "teammate_name": "<name>" } })
 ```
 
-Only the Dispatcher should pass `session_id`. Use a session id from
-`feishu_channel_status().sessions`. After the call, run status again and check:
+The Dispatcher may also assign an explicit `session_id` from
+`feishu_channel_status().sessions`. Pass `session_id` **or** `match`, not both;
+`match` selects the live session whose `metadata` equals every given key, and
+errors clearly when nothing matches or when more than one does (the message
+lists the candidate session ids — pass `session_id` to disambiguate). After the
+call, run status again and check:
 
 - `owner_session_id` is the teammate session id.
 - `effective_target_session_id` is the same teammate session id.
@@ -89,10 +105,10 @@ Use this when the product flow is: "Dispatcher tells the TM to take the
 channel", and the TM should perform the final acquire through its own MCP
 connection.
 
-Dispatcher:
+Dispatcher (by name, or by an explicit `session_id`):
 
 ```text
-feishu_channel_grant({ "session_id": "<tm-session-id>" })
+feishu_channel_grant({ "match": { "teammate_name": "<name>" } })
 ```
 
 Then instruct that teammate to call:
@@ -138,6 +154,12 @@ Use reclaim only as recovery. For normal cooperative handoff, prefer
 
 - `no live channel proxy session` — the target session id is not connected.
   Recheck status and use a live id.
+- `no live channel proxy matching` — no live session's `metadata` matches the
+  `match` selector. Recheck status; the teammate may not be connected, or may be
+  an older proxy that reports no `teammate_name`.
+- `ambiguous match` — more than one live session matched. The message lists the
+  candidate session ids; pass one as `session_id` to disambiguate.
+- `pass only one of session_id / match` — supply a single selector, not both.
 - `channel ownership was not granted by the dispatcher` — an ordinary teammate
   tried to acquire without a Dispatcher grant. Ask the Dispatcher to grant or
   directly assign.

@@ -22,7 +22,7 @@ export const CHANNEL_OWNER_TOOLS: Tool[] = [
   {
     name: 'feishu_channel_grant',
     description:
-      'Allow one live teammate session to acquire inbound Feishu channel delivery. Dispatcher-only.',
+      'Allow one live teammate session to acquire inbound Feishu channel delivery. Dispatcher-only. Target the teammate by session_id or by match.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -30,14 +30,19 @@ export const CHANNEL_OWNER_TOOLS: Tool[] = [
           type: 'string',
           description: 'Live teammate proxy session_id that may call feishu_channel_acquire.',
         },
+        match: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description:
+            'Select the target proxy by matching its registered metadata; every key must equal (e.g. { "teammate_name": "api-worker" }). Use instead of session_id, not together.',
+        },
       },
-      required: ['session_id'],
     },
   },
   {
     name: 'feishu_channel_acquire',
     description:
-      'Acquire inbound Feishu channel delivery. Dispatcher may assign a live session_id directly; ordinary sessions need a dispatcher grant.',
+      'Acquire inbound Feishu channel delivery. Dispatcher may assign a live target directly; ordinary sessions need a dispatcher grant.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -45,6 +50,12 @@ export const CHANNEL_OWNER_TOOLS: Tool[] = [
           type: 'string',
           description:
             'Optional live proxy session_id to assign as owner. Dispatcher-only; ordinary sessions acquire only themselves when granted.',
+        },
+        match: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description:
+            'Optional metadata selector for the target proxy; every key must equal (e.g. { "teammate_name": "api-worker" }). Dispatcher-only assignment; use instead of session_id, not together.',
         },
       },
     },
@@ -118,34 +129,28 @@ export class ChannelOwnerState {
         if (callerSession.role !== 'dispatcher') {
           return { handled: true, result: toolText('only the dispatcher may grant channel ownership', true) }
         }
-        const requested = typeof args.session_id === 'string' && args.session_id.length > 0
-          ? args.session_id
-          : undefined
-        if (!requested) return { handled: true, result: toolText('session_id is required', true) }
-        const target = [...connections].find((conn) => conn.session?.sessionId === requested)
-        if (!target?.session) {
-          return { handled: true, result: toolText(`no live channel proxy session: ${requested}`, true) }
+        const selected = resolveSelector(args, connections)
+        if (selected.kind === 'error') return { handled: true, result: toolText(selected.message, true) }
+        if (selected.kind === 'none') {
+          return { handled: true, result: toolText('session_id or match is required', true) }
         }
-        if (target.session.role === 'dispatcher') {
+        if (selected.session.role === 'dispatcher') {
           return { handled: true, result: toolText('dispatcher already owns the default channel target', true) }
         }
-        this.#grantedSessionId = target.session.sessionId
+        this.#grantedSessionId = selected.session.sessionId
         return {
           handled: true,
-          result: toolText(`Feishu channel acquire grant issued to ${target.session.sessionId}.`),
+          result: toolText(`Feishu channel acquire grant issued to ${selected.session.sessionId}.`),
         }
       }
       case 'feishu_channel_acquire': {
         const callerSession = caller.session
         if (!callerSession) return { handled: true, result: toolText('channel proxy is not registered', true) }
-        const requested = typeof args.session_id === 'string' && args.session_id.length > 0
-          ? args.session_id
-          : callerSession.sessionId
-        const target = [...connections].find((conn) => conn.session?.sessionId === requested)
-        if (!target?.session) {
-          return { handled: true, result: toolText(`no live channel proxy session: ${requested}`, true) }
-        }
-        if (callerSession.role !== 'dispatcher' && requested !== callerSession.sessionId) {
+        const selected = resolveSelector(args, connections)
+        if (selected.kind === 'error') return { handled: true, result: toolText(selected.message, true) }
+        // No selector means the caller acquires itself.
+        const targetSession = selected.kind === 'target' ? selected.session : callerSession
+        if (callerSession.role !== 'dispatcher' && targetSession.sessionId !== callerSession.sessionId) {
           return {
             handled: true,
             result: toolText('only the dispatcher may assign channel ownership to another session', true),
@@ -157,13 +162,13 @@ export class ChannelOwnerState {
             result: toolText('channel ownership was not granted by the dispatcher', true),
           }
         }
-        this.setOwner(target.session.sessionId)
-        if (this.#grantedSessionId === target.session.sessionId) this.#grantedSessionId = undefined
+        this.setOwner(targetSession.sessionId)
+        if (this.#grantedSessionId === targetSession.sessionId) this.#grantedSessionId = undefined
         this.onChanged()
         return {
           handled: true,
           result: toolText(
-            `Feishu channel owner is now ${target.session.sessionId} (${target.session.role}, epoch ${this.#leaseEpoch}).`,
+            `Feishu channel owner is now ${targetSession.sessionId} (${targetSession.role}, epoch ${this.#leaseEpoch}).`,
           ),
         }
       }
@@ -239,6 +244,65 @@ export class ChannelOwnerState {
     this.#ownerSessionId = sessionId
     this.#leaseEpoch += 1
   }
+}
+
+type SelectorResult =
+  | { kind: 'none' }
+  | { kind: 'error'; message: string }
+  | { kind: 'target'; target: DaemonConnection; session: NonNullable<DaemonConnection['session']> }
+
+/**
+ * Resolve the target proxy a grant/acquire call addresses, from a neutral
+ * selector: an explicit `session_id`, or a `match` object compared against each
+ * session's self-reported `metadata` (every key must equal). The channel core
+ * never interprets a metadata key — `{ teammate_name: "api-worker" }` is just a
+ * pair to match. `kind: 'none'` means no selector was given (the caller decides
+ * the default — acquire-self, or grant-requires-a-target).
+ */
+function resolveSelector(
+  args: Record<string, unknown>,
+  connections: ReadonlySet<DaemonConnection>,
+): SelectorResult {
+  const sessionId =
+    typeof args.session_id === 'string' && args.session_id.length > 0 ? args.session_id : undefined
+  const match = parseMatch(args.match)
+  if (sessionId !== undefined && match !== undefined) {
+    return { kind: 'error', message: 'pass only one of session_id / match' }
+  }
+  if (sessionId !== undefined) {
+    const target = [...connections].find((conn) => conn.session?.sessionId === sessionId)
+    if (!target?.session) return { kind: 'error', message: `no live channel proxy session: ${sessionId}` }
+    return { kind: 'target', target, session: target.session }
+  }
+  if (match !== undefined) {
+    const entries = Object.entries(match)
+    const matched = [...connections].filter(
+      (conn) => conn.session !== null && entries.every(([k, v]) => conn.session?.metadata[k] === v),
+    )
+    if (matched.length === 0) {
+      return { kind: 'error', message: `no live channel proxy matching: ${JSON.stringify(match)}` }
+    }
+    if (matched.length > 1) {
+      const candidates = matched.map((conn) => conn.session?.sessionId).join(', ')
+      return {
+        kind: 'error',
+        message: `ambiguous match: ${JSON.stringify(match)}; candidates: ${candidates}; pass session_id to disambiguate`,
+      }
+    }
+    const target = matched[0]!
+    return { kind: 'target', target, session: target.session as NonNullable<DaemonConnection['session']> }
+  }
+  return { kind: 'none' }
+}
+
+/** A `match` selector is a non-empty object of string→string pairs; anything else is treated as absent. */
+function parseMatch(value: unknown): Record<string, string> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof v === 'string') out[k] = v
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 function toolJson(value: unknown): CallToolResult {

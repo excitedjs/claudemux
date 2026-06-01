@@ -690,6 +690,7 @@ export async function connectProxyOrSpawnDaemon(deps: ConnectProxyDeps): Promise
         pid: process.pid,
         proxyVersion: SERVER_VERSION,
         role: proxyRole(),
+        metadata: deriveProxyMetadata(),
         mcpServer: deps.mcpServer,
         logError: defaultLogError,
       })
@@ -766,6 +767,46 @@ function safeRealpath(path: string): string {
   } catch {
     return path
   }
+}
+
+/**
+ * Self-reported identity attached to `register` so a coordinator can locate this
+ * session by a readable key instead of reverse-engineering it from `pid`. The
+ * channel core treats every entry as an opaque string pair; only the keys are a
+ * convention. Composed of two independent contributors so the core stays free
+ * of any orchestrator-specific knowledge:
+ *
+ *  - `cwd` — the session project dir, derived from `CLAUDE_PROJECT_DIR` (a
+ *    Claude Code standard, present for any session, not claudemux-specific).
+ *  - claudemux identity — see `claudemuxIdentityFromEnv`, the single named seam
+ *    where a claudemux-specific env name is read. A future spawner or a generic
+ *    `FEISHU_CHANNEL_META_*` env-prefix harvest would slot in here without
+ *    touching the wire type or the daemon.
+ */
+export function deriveProxyMetadata(
+  env: Record<string, string | undefined> = process.env,
+): Record<string, string> {
+  const metadata: Record<string, string> = {}
+  // Do not fall back to `process.cwd()`: the proxy's own cwd is the plugin dir
+  // (it launches via `npm --prefix`), not the session workspace.
+  const cwdSource = env.CLAUDE_PROJECT_DIR ?? env.INIT_CWD
+  if (cwdSource && cwdSource.length > 0) metadata.cwd = safeRealpath(cwdSource)
+  Object.assign(metadata, claudemuxIdentityFromEnv(env))
+  return metadata
+}
+
+/**
+ * The one place feishu-channel reads a claudemux-specific env var. claudemux's
+ * `tm spawn` injects `CLAUDEMUX_TEAMMATE_NAME` into the teammate's tmux session,
+ * which the proxy inherits; the dispatcher session has none. Best-effort: when
+ * absent (a non-claudemux session, or the dispatcher) it contributes nothing,
+ * so it adds no runtime or version dependency on claudemux.
+ */
+export function claudemuxIdentityFromEnv(
+  env: Record<string, string | undefined>,
+): Record<string, string> {
+  const name = sessionToken(env.CLAUDEMUX_TEAMMATE_NAME)
+  return name === null ? {} : { teammate_name: name }
 }
 
 function sleep(ms: number): Promise<void> {
