@@ -1,545 +1,232 @@
 /**
- * `tm` help text — the single source of truth for the human-facing CLI help.
+ * `tm` CLI help text.
  *
- * The Bash `bin/tm` is retired on the `next` line; help that used to come from
- * `cmd_help` and the per-verb `help_<verb>` heredocs lives here instead. The
- * text is byte-exact with what the bash help printed (every help line ends
- * with a newline, matching `cat <<'EOF'` semantics) so the conformance harness
- * can golden it without surprises and `tests/help` users see no UX drift.
- *
- * The CLI dispatch layer (`cli/dispatch.ts`) does the routing — this module
- * just owns the strings.
+ * Keep this surface terse. It is mostly read by dispatcher agents that need
+ * flag shape, output shape, and the few operational caveats that change the
+ * next command.
  */
 
-/** Top-level synopsis — printed by `tm`, `tm help`, `tm --help`, `tm -h`. */
-export const OVERVIEW_HELP = `tm — teammate manager for the dispatcher skill
+/** Top-level synopsis: `tm`, `tm help`, `tm --help`, `tm -h`. */
+export const OVERVIEW_HELP = `tm - teammate manager for dispatcher agents
 
-Run \`tm <verb> --help\` (or \`tm help <verb>\`) for per-verb detail.
+Usage:
+  tm <verb> [args]
+  tm help [verb]
+  tm <verb> --help
 
-NAMING (after the schema 2 cut)
-  Teammates have flat opaque identifiers (\`<name>\`). The source repo
-  is the spawn-time \`<path>\` positional, recorded in identity, and
-  reachable through \`tm ls\`'s REPO column. \`tm send <name>\`,
-  \`tm kill <name>\`, etc. are name-based — no path coupling.
-
-USAGE  (most common first)
-  tm spawn <path> [--name <id>] [--prompt "..."] [--no-worktree]
-                                         launch a teammate in <path>. Default
-                                         creates a git worktree at
-                                         <path>/.claude/worktrees/<name>/.
-                                         --no-worktree keeps the teammate at
-                                         <path> itself. --name overrides the
-                                         auto-generated \`<path-leaf>-<rand4>\`
-                                         (must be globally unique).
-  tm send <name> --prompt "..."          atomic round-trip: send + wait + print reply
-  tm wait <name> [--fresh]               wait for next Stop; print reply
-  tm compact <name>                      /compact + verify, prints "compacted"
-  tm resume <name> [<sid/thread-id>]     resume a prior conversation
-  tm resume --engine <e> --repo <path> --id <sid/thread-id>
-                                         resume an orphaned history row under a
-                                         fresh teammate name
-  tm last <name> [--verbose]             reprint last reply; Codex raw turn with --verbose
+Core:
+  tm spawn <path> [--name <id>] [--intent "..."] [--prompt "..."]
+  tm send <name> --prompt "..."
+  tm wait <name> [--fresh]
+  tm resume <name> [<sid/thread-id>]
+  tm resume --engine <claude|codex> --repo <path> --id <sid/thread-id>
   tm kill <name> [--status <s>] [--note <text>]
-                                         graceful /exit (clean worktree auto-removed);
-                                         dirty worktree preserved with stderr note
-  tm reload <name>... | --all            fan out /reload-plugins
-  tm ls [--all]                          list teammates (NAME REPO WORKTREE ENGINE STATE);
-                                         --all also lists killed teammates (resumable by name)
-  tm states [--all]                      rich fleet snapshot; --all includes killed teammates
-  tm ctx <name>... | --all               real ctx-window usage from jsonl
-  tm history [--repo <path>] [--id <id>] query past and live teammate sessions
-  tm mem <name>                          cat the parent repo's auto-memory index
-  tm ask "<prompt>"                      one-shot turn on an idle codex teammate (pool)
+  tm kill --id <id> --status <s> [--note <text>]
 
-DIAGNOSTIC (escape hatches — prefer the verbs above)
-  tm status <name>                       capture-pane the teammate's live screen
-  tm poll <name> <regex>                 block until pane matches
-  tm doctor                              self-check: tm path/version, env, tmux,
-                                         idle dir, active teammates
+Inspect:
+  tm ls [--all]
+  tm states [--all]
+  tm last <name> [--verbose]
+  tm ctx <name>... | --all
+  tm history [filters] [--fields a,b,c]
+  tm mem <name>
 
-HELP
-  tm --help / tm -h / tm help            this text
-  tm <verb> --help / tm help <verb>      detail for one verb
+Maintenance:
+  tm compact <name>
+  tm reload <name>... | --all
+  tm ask "<prompt>"
 
-ENVIRONMENT
-  TM_DISPATCHER_DIR    Dispatcher directory (parent of sibling repos).
-                       scripts/setup.sh writes it into the dispatcher's
-                       .claude/settings.json on first /claudemux:setup,
-                       and Claude Code injects it as env at every
-                       claude launch — so tm stays correct even when
-                       the Bash tool's cwd drifts. Falls back to $PWD
-                       when unset. \`tm spawn <path>\` resolves a relative
-                       <path> against this directory.
-  CLAUDEMUX_REMOTE_CONTROL
-                       When truthy (1/true/yes/on), \`tm spawn\` launches
-                       Claude teammates with Remote Control by default —
-                       the per-teammate alternative to the user-global
-                       remoteControlAtStartup, which would also enable it
-                       for the dispatcher and unrelated claude sessions.
-                       Set it in the dispatcher's .claude/settings.json
-                       env block. A per-spawn --remote-control /
-                       --no-remote-control overrides it.
+Diagnostics:
+  tm status <name> [lines=80]
+  tm poll <name> <regex> [timeout=180]
+  tm doctor
+
+Names are flat teammate ids. \`tm spawn <path>\` records the repo; follow-up
+verbs use \`<name>\`, not paths. Relative paths resolve against
+TM_DISPATCHER_DIR (or $PWD fallback).
+
+Remote Control default: CLAUDEMUX_REMOTE_CONTROL=1/true/yes/on.
 `
 
-/** Per-verb help text — `tm <verb> --help` and `tm help <verb>` both print this. */
+/** Per-verb help text: `tm <verb> --help` and `tm help <verb>`. */
 export const HELP_TEXTS: Readonly<Record<string, string>> = {
   ls: `tm ls [--all]
 
-      List teammates, one row each: NAME, REPO (last path segment),
-      WORKTREE (slug or '-'), ENGINE (claude / codex), STATE (idle /
-      busy / borrowed / unknown). The live fleet comes from each engine's session
-      listing. For a richer "who's doing what" view, prefer
-      \`tm states\`.
+List teammates:
+  NAME REPO WORKTREE ENGINE STATE
 
-      A Codex teammate that is lending its daemon to a one-shot
-      \`tm ask\` / direct turn reports STATE 'borrowed'; it is live,
-      but not idle for another borrowed turn.
-
-      --all also lists killed teammates — the identity snapshots
-      \`tm kill\` archives under /tmp/teammate-archive/<name>.json —
-      with STATE 'killed'. Their NAME / REPO / WORKTREE are enough to
-      re-launch with \`tm resume <name>\`, so you recover a killed
-      session without scraping /tmp by hand. A name that is live again
-      shows its live row, not the stale killed one.
+States: idle, busy, borrowed, unknown. With --all, include killed teammates
+from the kill-time identity archive.
 `,
+
   states: `tm states [--all]
 
-      Rich fleet snapshot, one row each: NAME, REPO, WORKTREE, ENGINE,
-      STATE, LAST (size + age of the last assistant reply), PREVIEW
-      (first chars of that reply). Claude reads
-      /tmp/claude-idle/<sid>.last; Codex reads the current thread's
-      rollout JSONL. Use to see what every teammate is doing at a
-      glance.
+Fleet snapshot:
+  NAME REPO WORKTREE ENGINE STATE LAST PREVIEW
 
-      STATE reuses the same vocabulary as \`tm history --state\`:
-      idle, busy, borrowed, killed, orphaned, unknown. A borrowed
-      Codex daemon is live but temporarily held by a one-shot turn.
-
-      --all also lists killed teammates (STATE 'killed') from the
-      kill-time identity archive, same as \`tm ls --all\`; their LAST /
-      PREVIEW render as '-' because the live markers are gone. Recover
-      one with \`tm resume <name>\`.
+States: idle, busy, borrowed, killed, orphaned, unknown. With --all, include
+killed teammates; LAST/PREVIEW are '-' for killed rows.
 `,
-  spawn: `tm spawn <path> [--name <id>] [--intent "..."] [--engine claude|codex] [--prompt "..."] [--no-worktree] [--remote-control] [--timeout N]
 
-      Launch a teammate in <path>. <path> is positional; it may be
-      absolute, or relative to the dispatcher dir
-      (TM_DISPATCHER_DIR / $PWD). The path must be an existing
-      directory — it is \`realpath\`-resolved and recorded as
-      \`identity.repo\` so every subsequent verb (\`tm send\`,
-      \`tm kill\`, \`tm last\`, \`tm mem\`, …) routes by NAME without
-      re-walking the filesystem.
+  spawn: `tm spawn <path> [--name <id>] [--intent "..."] [--engine claude|codex] [--prompt "..."] [--no-worktree] [--remote-control|--no-remote-control] [--timeout N]
 
-      <name> conventions (after the schema 2 cut):
-        - \`--name <id>\` is an explicit flat identifier. Allowed
-          shape: \`^[A-Za-z0-9][A-Za-z0-9_-]*$\`. Must be globally
-          unique across the dispatcher; collisions fail with
-          \`already exists\`.
-        - Omit \`--name\` and the verb auto-generates
-          \`<path-leaf>-<rand4>\`. The leaf is derived from
-          \`basename(realpath(<path>))\`; rand4 ensures multiple
-          teammates can target the same repo without collision.
+Launch a teammate in <path>. Relative paths resolve against TM_DISPATCHER_DIR.
+Default name is <repo-leaf>-<rand4>; explicit names must match
+^[A-Za-z0-9][A-Za-z0-9_-]*$ and be globally unique.
 
-      \`--intent "..."\` records a short git-subject-style task
-      subject on the existing display-name rail. \`tm history\`
-      exposes it as the queryable \`intent\` field and searches it
-      through \`--grep\`. Keep it concise; durable outcomes belong in
-      the issue, PR, or external tracker, with only close status and a
-      bounded note kept in tm metadata.
+Default cwd is <path>/.claude/worktrees/<name>/ on branch worktree-<name>.
+Use --no-worktree to run in <path> itself.
 
-      Default behaviour creates a git worktree at
-      \`<path>/.claude/worktrees/<name>/\` and runs the teammate
-      inside it (branch \`worktree-<name>\`, base ref HEAD). Pass
-      \`--no-worktree\` to keep the teammate at <path> itself —
-      useful for repo-wide work where a worktree would be a
-      negative-value isolation.
+--intent stores a short queryable task subject for tm history.
+--prompt sends the first turn and prints the reply.
+--engine defaults to claude.
+--remote-control is Claude-only; explicit flag beats CLAUDEMUX_REMOTE_CONTROL.
 
-      On a fresh launch the verb prints a \`base:\` line to stderr —
-      the branch + short sha the teammate starts from, plus a
-      best-effort ahead/behind vs the remote default branch. The base
-      is the repo's current HEAD, so a repo parked on a non-trunk
-      branch is visible at a glance rather than a silent surprise.
-
-      Without --prompt, the verb returns once the REPL signals
-      SessionStart (typically 2-4s on a warm Mac). With
-      \`--prompt "..."\`, the verb sleeps 3s after ready, sends the
-      prompt, waits for Stop, and prints the teammate's first-turn
-      reply on stdout — atomic bootstrap, one call.
-
-      \`--engine\` selects the teammate engine at spawn time. Default
-      is claude; pass \`--engine codex\` for a Codex daemon teammate.
-      The name carries no engine meaning, so \`codex-reviewer\` is a
-      Claude teammate unless \`--engine codex\` is set. Codex
-      teammates default to a self-managed git worktree at the same
-      \`.claude/worktrees/<name>/\` layout; they are not tmux sessions,
-      and \`--resume\` / \`--task\` are rejected on that path.
-
-      \`--remote-control\` launches this Claude teammate with Remote
-      Control on, so it gets its own claude.ai/code web + mobile URL
-      (printed in the teammate's startup banner; read it with
-      \`tm status <name>\`). It scopes Remote Control to the teammate
-      and leaves the user-global \`remoteControlAtStartup\` — which
-      would also turn it on for the dispatcher and every unrelated
-      \`claude\` session — untouched. \`--no-remote-control\` forces it
-      off. With neither flag the \`CLAUDEMUX_REMOTE_CONTROL\` config
-      supplies the default (off when unset); precedence is
-      explicit flag > config > off. Claude-only — an explicit
-      \`--remote-control\` is rejected with \`--engine codex\`.
-
-      Every teammate launches with the \`AskUserQuestion\`,
-      \`EnterPlanMode\`, and \`ExitPlanMode\` tools disabled — a
-      teammate runs with no human at its terminal, and each of those
-      opens a modal that holds the turn open waiting for a person. A
-      teammate raises questions or proposes a plan by ending its turn
-      with text, which \`tm send\` / \`tm spawn --prompt\` relays
-      straight back to the dispatcher.
-
-      Exit codes on the \`--prompt\` sync path:
-        0   first-turn reply
-        124 sync wait expired (teammate still booted — collect with
-            \`tm wait <name>\`; don't respawn, the name is taken)
-        1   real failure
+Exit codes on --prompt: 0 reply printed; 124 wait expired but teammate is
+still running; 1 failure.
 `,
+
   send: `tm send <name> --prompt "..." [--pane-quiet] [--timeout N]
 
-      Atomic round-trip by default: send prompt + wait for the Stop
-      hook + print the teammate's reply text on stdout. The
-      dispatcher's primary verb — folds what used to be send +
-      wait-idle + last into one call. Stdout is exclusively reply
-      text; status lines go to stderr (pipe-friendly).
-      <name> is the flat teammate identifier from \`tm spawn\` /
-      \`tm ls\` — never a path.
-      --prompt "..." the prompt text. Required. Same calling form
-        as 'tm spawn --prompt' / 'tm resume --prompt'. Flag order is
-        free: 'tm send <name> --prompt "..."' and 'tm send --prompt
-        "..." <name>' both work.
-      --pane-quiet falls back to pane-quiet detection. Use for
-        TUI-only commands that fire no hook: /help, /effort,
-        /agents, permission prompts. /compact and /clear do NOT
-        need it — the Stop hook now covers them via PostCompact /
-        SessionEnd.
-      --timeout N overrides the 1800s default wait.
-      After sending, confirms the REPL accepted the prompt as a turn
-      (the on-busy marker, or a new user entry in the transcript) and
-      re-sends Enter up to 3x if not — so an Enter swallowed by a modal
-      surfaces a stderr warning instead of a silent wait. The wait then
-      unblocks on either the Stop-hook idle marker OR a settled turn in
-      the transcript jsonl, so a session whose Stop hook never loaded
-      still ends its wait on disk evidence instead of timing out. On
-      that no-hook path the reply is recovered from the transcript (and
-      written back to <sid>.last), so stdout still carries it.
-      Empty stdout never silently means success: a turn with no text
-      (tool-only, /compact, /clear) prints the sentinel line "(no
-      text reply this turn — tool-only, /compact, /clear, or fresh
-      spawn)".
-      On the default (Stop-hook) path, also echoes the teammate's
-      post-turn ctx to stderr as "ctx: N tokens · ~M next turn · X%
-      of W (note)" — same data as 'tm ctx <name>' inline with the
-      reply. Skipped on --pane-quiet (no fresh usage path in jsonl).
-      Exit codes:
-        0   the reply landed within --timeout; stdout is the reply.
-        124 sync wait expired (no Stop hook within --timeout) but the
-            teammate is STILL running — stdout is the partial .last
-            if any, stderr names the verb to keep tailing with.
-            Don't respawn; the name is still taken. Re-collect with
-            'tm wait <name>' or check 'tm status <name>'.
-        1   real failure (no such tmux session, sid marker missing,
-            sendKeys broke). The teammate is gone or never started.
+Send one turn, wait for completion, print reply text on stdout. Status and ctx
+lines go to stderr.
 
-      When <name> is a codex teammate (recorded in the identity JSON),
-      this verb routes into the codex driver: --prompt is
-      required, --timeout is accepted, stdout is the final assistant
-      text (same pipe-friendly contract as Claude), stderr carries
-      sent/sid/ctx/raw-path status lines, and --pane-quiet is rejected
-      explicitly rather than silently ignored. The raw Codex Turn JSON
-      is atomically overwritten at
-      /tmp/teammate-codex/<name>/last-turn.json and can be read with
-      'tm last <name> --verbose'.
+--pane-quiet waits for pane quiet instead of the Stop hook; use for TUI-only
+commands. --timeout defaults to 1800s.
+
+Exit codes: 0 reply printed; 124 wait expired but teammate is still running;
+1 failure. Re-collect 124 with tm wait <name> or inspect with tm status <name>.
 `,
+
   wait: `tm wait <name> [timeout=1800] [--fresh] [--pane-quiet] [--timeout N]
 
-      Block until the teammate's next Stop hook (or pane-quiet
-      fallback), then print the reply to stdout — same output
-      contract as 'tm send'. Use when an external actor (Remote
-      Control web UI, mobile app, cron) drove the turn and you just
-      want to collect the result.
-      --fresh clears the idle/.last/.busy baseline up front so the
-        NEXT Stop unblocks the wait, not a prior one. Required when
-        monitoring an autonomously progressing teammate (no fresh
-        'tm send' to reset the baseline for you). No-op under
-        --pane-quiet (pane-quiet uses send-at timing instead of a
-        sid-keyed marker; the "≥3s since last send" gate already
-        provides the freshness guarantee).
-      --pane-quiet falls back to pane-quiet detection (same use
-        case as on 'tm send').
-      --timeout N is the flag form of the positional [timeout=1800];
-        both forms are accepted, and if both are passed, whichever
-        is parsed last wins.
-      Stop-hook path also echoes ctx to stderr (see 'tm send');
-      skipped on --pane-quiet.
-      Same exit codes as 'tm send': 0 on a fresh Stop, 124 if --timeout
-      elapses without one (teammate still running — re-run 'tm wait'),
-      1 on a real failure (no session / no sid marker).
+Wait for the next teammate completion and print reply text on stdout.
+
+Use --fresh when no tm send reset the baseline for this turn. --pane-quiet uses
+pane quiet instead of the Stop hook. If both positional timeout and --timeout
+are present, the later parsed value wins.
+
+Exit codes match tm send.
 `,
+
   compact: `tm compact <name> [timeout=1800] [--timeout N]
 
-      Send /compact and verify PostCompact fired. Prints "compacted"
-      on stdout when the Stop-hook idle marker is touched. Doesn't
-      read ctx — run 'tm ctx <name>' separately if you want the new
-      size.
-      Default timeout is 1800s — large contexts can run many
-      minutes, and the cap only fires when compaction never
-      finishes.
-      Two non-success modes with different exit codes:
-        1   Claude Code refuses with "Not enough messages to compact"
-            (transcript too short). That error fires no hook, so the
-            pane is scanned alongside the idle-marker poll to detect
-            it. /compact won't proceed; this is a true failure.
-        124 PostCompact never fires within timeout. Compaction may
-            still be running — same "sync wait expired, teammate
-            still alive" semantics as 'tm send'.
+Send /compact and wait for PostCompact. Prints:
+  compacted
+
+Exit codes: 0 compacted; 1 Claude refused (usually too few messages);
+124 timeout but teammate may still be compacting.
 `,
+
   resume: `tm resume <name> [<sid-or-thread-id>] [--prompt "..."] [--engine claude|codex]
 tm resume --engine <claude|codex> --repo <path> --id <sid-or-thread-id> [--name <fresh>] [--intent "..."] [--prompt "..."]
 
-      Resume a prior conversation. <name> is the flat teammate
-      identifier from a previous spawn — never a path.
-      The id-addressed form resumes a row from \`tm history\`, including
-      orphaned rows with no live or killed teammate name. \`--repo\`
-      anchors the cwd/project directory; omit \`--name\` and tm mints a
-      fresh \`<repo-leaf>-<rand4>\` handle. \`--id\` accepts a full id
-      or an unambiguous prefix and rejects ambiguous prefixes with the
-      candidate full ids.
-      Claude teammates use a transcript sid: passing <sid> validates
-      that transcript and launches 'claude --resume <sid>'. Without
-      sid, Claude's native 'claude --continue' chooses the latest
-      session for the cwd; the /tmp/teammate-<name>.sid marker is
-      written by the SessionStart hook after the REPL starts.
-      Codex teammates use a thread id: passing <thread-id> calls
-      thread/resume directly. Without thread id, claudemux starts a new
-      app-server daemon, calls thread/list(limit=1, sortKey=updated_at,
-      cwd=<recorded-cwd>) to ask Codex for the latest thread, writes
-      that thread id back to the Codex registry, and then calls
-      thread/resume.
-      Engine selection without an explicit id: when the teammate has no
-      base record left (e.g. after 'tm kill'), claudemux probes the cwd
-      against both engines' history (Claude project dir + Codex rollout
-      sessions). A single candidate auto-routes; if both engines hold
-      resumable history the verb refuses to guess and asks for
-      disambiguation. Pass --engine claude|codex to skip probing and
-      route directly, or supply an explicit <sid>/<thread-id>. --engine
-      overrides every other selector — even an active router record.
-      Fails if a teammate session for <name> already exists.
-      --prompt sends a follow-up after relaunch, atomic like
-      'tm spawn --prompt' (inherits 'tm send''s stderr ctx echo on
-      the sync path where available).
-      Like every teammate launch, the resumed REPL starts with the
-      AskUserQuestion tool disabled (see 'tm help spawn' for why): a
-      resumed teammate raises questions by ending its turn with
-      text, not by opening a modal.
+Resume a prior conversation. Name form uses the existing or archived teammate
+identity. Id form resumes a tm history row; --id accepts a full id or
+unambiguous prefix, and --repo anchors cwd/project lookup.
 
-      Large-session startup prompt: resuming a big, hours-old Claude
-      session can make Claude Code raise a "Resume from summary
-      (recommended) / Resume full session as-is" startup selection
-      that waits for a choice — and a teammate has no human to answer
-      it. Teammates suppress it: 'tm spawn' / 'tm resume' launch with
-      CLAUDE_CODE_RESUME_TOKEN_THRESHOLD set far above any real window,
-      so the prompt never renders and the full session loads silently.
-      Fallback only — if a future Claude Code build ignores that knob
-      and the prompt reappears, confirm the REPL is at a normal input
-      box with 'tm status <name>' before the next 'tm send' (a blind
-      send's Enter would pick the summary and discard context).
+Claude ids are transcript sids. Codex ids are thread ids. Without an explicit
+id, name form probes history and uses --engine to break ties.
+
+Fails if <name> is already running. --prompt sends a follow-up after relaunch.
 `,
+
   last: `tm last <name> [--verbose]
 
-      Print the teammate's last-turn reply from
-      /tmp/claude-idle/<sid>.last. Empty or missing file dies with
-      "no reply yet". Use this when you want to re-read a reply the
-      send/wait verbs already printed (their output is one-shot).
-      For a Codex teammate, --verbose prints the raw
-      /tmp/teammate-codex/<name>/last-turn.json instead of the
-      assistant-text summary.
+Print the last assistant reply. For Codex, --verbose prints the raw saved turn
+JSON instead of the assistant-text summary.
 `,
+
   mem: `tm mem <name>
 
-      Cat the sibling repo's auto-memory MEMORY.md to stdout. Use
-      this before composing a \`tm spawn\` / \`tm send --prompt\` that
-      references sibling state (feature-gate names, branch names,
-      in-progress projects) — sibling memories live in separate
-      per-cwd index files that the dispatcher's own AutoMemory does
-      not include. Resolves the encoded project dir as
-      $HOME/.claude/projects/<encoded>/memory/MEMORY.md where
-      <encoded> = the repo's physical cwd with every \`/\` and \`.\`
-      replaced by \`-\`. If no MEMORY.md exists for the repo (never
-      ran claude, or its project dir was pruned), prints a one-line
-      notice to stderr and returns 0 with empty stdout — that is
-      the normal "no sibling memory" case, not an error.
-
-      MEMORY.md entries can be stale. Verify any fact you are about
-      to inject into a teammate's prompt against current code or
-      git state before sending.
+Print the teammate repo's AutoMemory MEMORY.md. Missing memory is exit 0 with
+empty stdout and a one-line stderr notice. Treat memory as hints; verify before
+prompting a teammate with it.
 `,
+
   kill: `tm kill <name> [--status <merged|done|shelved|abandoned|blocked>] [--note <text>]
 tm kill --id <full-or-prefix> --status <merged|done|shelved|abandoned|blocked> [--note <text>]
 
-      Graceful teammate shutdown. For a Claude teammate the verb
-      sends \`/exit\` to the REPL and waits up to 15s for the
-      SessionEnd hook to fire (observed as either the tmux pane
-      disappearing or the teammate's idle marker being touched by
-      \`on-stop.sh\`, whichever comes first). \`/exit\` in a clean
-      worktree auto-removes both the worktree directory and the
-      \`worktree-<slug>\` branch; in a dirty worktree Claude shows
-      an interactive "Keep / Remove worktree" prompt — the verb
-      presses Enter (default: Keep) and waits another 5s. If
-      neither signal lands inside that 20s combined budget, the
-      verb falls back to \`tmux kill-session\` (SIGHUP) and prints
-      a stderr note pointing at the leftover worktree.
+Stop a teammate and clear live markers. Dirty worktrees are preserved with a
+stderr note; clean worktrees are removed when the engine can do so safely.
 
-      Override the combined budget via \`CLAUDEMUX_KILL_GRACE_MS\`
-      (used by the conformance harness to keep test runs fast).
-
-      For a Codex teammate the verb SIGTERMs the daemon. When the
-      identity record carries a \`worktreeSlug\`, the verb tries
-      \`git worktree remove --force <name>/.claude/worktrees/<slug>\`;
-      a dirty worktree is preserved with a stderr warning and a
-      hand-typeable removal command.
-
-      The identity JSON, \`.sid\` / \`.cwd\` / \`.ready\` / \`.send-at\`
-      marker files, and idle / busy / .last markers are cleared on
-      every exit path (clean, dirty, forced).
-
-      \`--status\` writes queryable close metadata for \`tm history
-      --status ...\`. Use \`--note\` for a bounded human-readable close
-      note; note text is inspectable metadata, not a query index. The
-      id-addressed form records close metadata for a session that died
-      without a clean \`tm kill <name>\`; it does not stop a process.
+--status records queryable close metadata for tm history --status. --note is a
+bounded note preview, not a query index. The --id form only records close
+metadata for an existing history row; it does not stop a process.
 `,
+
   ask: `tm ask "<prompt>"
 
-      Drive a one-shot turn on an idle codex teammate from the
-      Codex pool, on a fresh thread (so the borrowed teammate's
-      persistent conversation thread is not polluted). Prints the
-      turn's JSON to stdout.
+Run a one-shot turn on an idle Codex teammate from the pool and print the turn
+JSON. The borrowed teammate's persistent thread is not polluted.
 
-      Pool semantics (decision node-cli-orchestrator §6, pool decision A): the named
-      Codex-engine teammates are the pool. ask picks any idle one,
-      borrows it for one turn, and returns it. "Idle" means it has no
-      active borrow lock; the lock is a file under
-      /tmp/teammate-codex/<name>/lock.
-
-      Errors when no codex teammate has been spawned, when every
-      spawned teammate is dead (run 'tm doctor' to reap), or when
-      every alive teammate is currently borrowed (retry, or spawn one
-      more).
+Fails when no Codex teammate exists, all are dead, or all are borrowed.
 `,
+
   reload: `tm reload <name>... | --all
 
-      Fan out /reload-plugins to one, many, or every teammate.
-      Sugar over 'tm send <name> --prompt /reload-plugins'. --all enumerates
-      from \`tmux ls\`; missing/dead teammates are skipped with a
-      stderr note and the exit status reflects whether every send
-      succeeded.
+Send /reload-plugins to one or more teammates. --all enumerates live teammates;
+missing/dead targets are skipped with stderr notes.
 `,
+
   ctx: `tm ctx <name>... | --all [--window 200k|1m]
 
-      Real context-window usage per teammate, read from the jsonl
-      usage block (more accurate than the TUI percentage). Prints
-      current prompt size, next-turn estimate, and percent of
-      window.
-      Window size is not in the transcript: a peak above ~210k
-      proves a 1M window; otherwise 200k is assumed (labelled
-      accordingly). --window forces the assumption.
+Print context-window usage from transcript JSONL. A peak above ~210k implies a
+1M window; otherwise 200k is assumed unless --window overrides it.
 `,
+
   history: `tm history [--repo <leaf|path>] [--name <glob>] [--id <full-or-prefix>] [--engine claude|codex] [--since <time>] [--until <time>] [--state <state>] [--status <status>] [--grep <text>] [--limit N] [--cursor N] [--fields a,b,c] [--json|--oneline|--table]
 
-      Query past and live teammate sessions. The grammar is flag-only:
-      legacy \`tm history <name>\` and \`tm history <name> <id>\` are
-      removed. Default output is bounded JSON for dispatcher agents:
-      { "items": [...], "nextCursor": "N" | null }. Use \`--limit\`
-      and \`--cursor\` to page; unbounded blob reads are not part of
-      the contract. \`--oneline\` and \`--table\` are opt-in views for
-      humans.
+Query past and live teammate sessions. Grammar is flag-only; legacy
+\`tm history <name>\` is removed.
 
-      Stable JSON fields: id, engine, name, repo, cwd, worktreeSlug,
-      branch, baseRef, createdAt, createdAtSource, lastSeenAt, state,
-      intent, closeStatus, closeNotePreview, lastAssistantPreview,
-      resumeCommand, source, topic, path, sizeBytes. \`--fields\`
-      accepts a comma-separated subset and errors with this valid list
-      when a field is empty or unknown.
+Default output is bounded JSON:
+  { "items": [...], "nextCursor": "N" | null }
 
-      Sources are merged into one newest-first view. The forward
-      tm-owned history index is the attribution spine for future
-      sessions; Claude transcripts and Codex rollouts enrich rows and
-      recover pre-index sessions. The index starts empty and never reads
-      or imports retired Markdown ledger files.
+Use --limit/--cursor for paging. --fields selects JSON fields. Valid fields:
+id, engine, name, repo, cwd, worktreeSlug, branch, baseRef, createdAt,
+createdAtSource, lastSeenAt, state, intent, closeStatus, closeNotePreview,
+lastAssistantPreview, resumeCommand, source, topic, path, sizeBytes.
 
-      Time filters use the in-file session-created timestamp for
-      transcripts/rollouts. When a source lacks that timestamp,
-      \`createdAtSource: "mtime"\` exposes the mtime fallback. \`--name\`
-      is an attribution filter only: it matches indexed, live, and
-      last-killed records; robust recovery should prefer repo/id/time.
+Sources: forward tm history index, live/archived identity records, Claude
+transcripts, Codex rollouts. The index starts empty and never imports old
+Markdown ledgers.
 
-      STATE values: live, idle, busy, borrowed, killed, orphaned,
-      unknown. Close status values: merged, done, shelved, abandoned,
-      blocked. \`intent\` is queryable through \`--grep\`; free-form
-      outcome is not queryable and lives in external artifacts plus the
-      bounded preview/note fields.
+Time filters use the first in-file event timestamp; createdAtSource exposes
+mtime fallback. --name matches only indexed/live/last-killed attribution; for
+robust recovery prefer repo/id/time.
 
-      Every row with enough anchor data includes \`resumeCommand\`, for
-      example:
-        tm resume --engine claude --repo '/path/to/repo' --id '<sid>'
+States: live, idle, busy, borrowed, killed, orphaned, unknown.
+Close statuses: merged, done, shelved, abandoned, blocked.
 `,
+
   status: `tm status <name> [lines=80]
 
-      Capture-pane the teammate's live screen. DIAGNOSTIC — the
-      sync send/wait verbs make this unnecessary for normal flow.
-      Reach for it only when you genuinely need the live pane (e.g.
-      confirming a TUI dialog is up).
+Diagnostic capture-pane. Use when send/wait cannot tell you the live TUI state.
 `,
+
   poll: `tm poll <name> <regex> [timeout=180]
 
-      Block until pane content matches a regex. DIAGNOSTIC fallback
-      when \`tm wait\` can't catch an interesting intermediate state.
-      Match the EXPECTED RESULT, not the prompt you just sent (a
-      pattern that appears in the sent prompt makes the wait return
-      instantly).
+Diagnostic pane wait. Match the expected result, not text from the prompt you
+just sent.
 `,
+
   doctor: `tm doctor
 
-      Self-check for the dispatcher environment. Reports, in order:
-        - tm executable: resolved path and reported plugin version
-        - dispatcher dir: TM_DISPATCHER_DIR (or $PWD fallback),
-          whether the env was actually set, and whether the
-          resolved path matches your current $PWD
-        - tmux: installed? version? server running? are we inside
-          a tmux session?
-        - idle dir: does /tmp/claude-idle/ exist?
-        - active teammates: count + names from \`tm ls\`
-      Read-only — doesn't change any state. Use it when something
-      looks off ("why is tm using the wrong path?" / "did
-      /claudemux:setup actually write the env?"). Exit code is
-      always 0; interpret the printed lines, not the status.
+Read-only environment check: tm path/version, dispatcher dir, tmux status,
+idle dir, and active teammates. Always exits 0; read the printed lines.
 `,
 }
 
 /**
- * Verbs removed in earlier releases. A user (or stale doc) still typing them
- * gets a specific migration hint and exit 2, instead of the generic
- * "unknown subcommand" path — these are part of the user-facing contract.
- *
- * The `--help` pre-scan in `cli/parse.ts` runs first, so e.g. `tm ask --help`
- * still reaches the overview (no per-verb help exists for a removed verb) —
- * matching the bash behaviour that this layer preserves.
+ * Removed verbs keep specific migration hints instead of falling through to
+ * "unknown subcommand".
  */
 export const REMOVED_VERB_MESSAGES: Readonly<Record<string, string>> = {
-  // `tm ask` was removed in 0.3.0 and re-introduced in stage 4 with new
-  // semantics (codex-mode borrow/return on a Codex-engine teammate). The
-  // entry is therefore intentionally absent here — `cli/dispatch.ts` routes the
-  // verb into the native dispatch table instead.
-  'wait-idle': `tm wait-idle was renamed to 'tm wait' in 0.3.0. Same semantics; the new verb also prints .last on stdout by default.
+  'wait-idle': `tm wait-idle was renamed to 'tm wait'.
 `,
-  'wait-quiet': `tm wait-quiet was folded into the --pane-quiet flag in 0.3.0. Use 'tm wait <name> --pane-quiet' (or 'tm send <name> --prompt "..." --pane-quiet' for the send-then-wait composition).
+  'wait-quiet': `tm wait-quiet was folded into --pane-quiet. Use 'tm wait <name> --pane-quiet' or 'tm send <name> --prompt "..." --pane-quiet'.
 `,
-  archive: `tm archive was removed with the manual dispatcher Markdown ledger. Use 'tm kill <name> --status <merged|done|shelved|abandoned|blocked> [--note <text>]' to record close metadata, and query it with 'tm history --status <status>'. Existing ledger .md files are abandoned in place; tm does not migrate them.
+  archive: `tm archive was removed with the manual dispatcher Markdown ledger. Use 'tm kill <name> --status <merged|done|shelved|abandoned|blocked> [--note <text>]' and query with 'tm history --status <status>'. Existing ledger .md files are abandoned in place; tm does not migrate them.
 `,
 }
