@@ -217,6 +217,43 @@ describe('startDaemon (process body)', () => {
     started.length = 0
   })
 
+  test('releases daemon resources when Feishu startup fails', async () => {
+    const socketPath = tmp('sock')
+    const lockPath = tmp('lock')
+    const legacyLock = tmp('legacy.lock')
+    const transport = fakeTransport()
+    vi.mocked(transport.start).mockRejectedValueOnce(new Error('startup failed'))
+    const acquireLegacyInboundLock = vi.fn(async () => ({ acquired: true, evicted: false }))
+    const releaseLegacyInboundLock = vi.fn()
+
+    await expect(startDaemon({
+      lockPath,
+      socketPath,
+      daemonVersion: '0.2.1',
+      generation: 1,
+      self: self(socketPath),
+      transport,
+      accessFile: tmp('access.json'),
+      queueFile: tmp('queue.json'),
+      baseDir: tmpdir(),
+      legacyInboundLockPath: legacyLock,
+      acquireLegacyInboundLock,
+      releaseLegacyInboundLock,
+    })).rejects.toThrow('startup failed')
+
+    expect(existsSync(`${lockPath}.lock`)).toBe(false)
+    expect(releaseLegacyInboundLock).toHaveBeenCalledWith(legacyLock)
+    await expect(connectToDaemon({
+      socketPath,
+      sessionId: 's1',
+      pid: 1,
+      proxyVersion: '0.2.1',
+      role: 'dispatcher',
+      deliverToClaude: async () => {},
+      logError: () => {},
+    })).rejects.toThrow()
+  })
+
   test('stands down before opening Feishu when an old legacy holder cannot be evicted', async () => {
     const acquireLegacyInboundLock = vi.fn(async () => ({
       acquired: false as const,

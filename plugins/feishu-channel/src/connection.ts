@@ -22,6 +22,14 @@ export function reconnectedLogLine(): string {
   return 'Feishu connection re-established.'
 }
 
+/** Running reconnect exhausted its retry budget and the channel stopped it. */
+export function reconnectExhaustedLogLine(attempts: number): string {
+  return (
+    `Feishu connection could not be re-established after ${attempts} reconnect attempts; ` +
+    'stopping the connection until the channel restarts.'
+  )
+}
+
 /**
  * The SDK reported a connection error and stopped — a non-recoverable error,
  * or an exhausted retry budget. The channel needs a restart to reconnect.

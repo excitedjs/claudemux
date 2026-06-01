@@ -21,6 +21,7 @@ import { botIdentityFile } from './paths'
 /** How a bot's identity first became known. `/introduce` is an explicit, */
 /** human- or bot-driven handshake; `observed` is passive auto-discovery. */
 export type BotIdentitySource = 'introduce' | 'observed'
+const UNKNOWN_BOT_NAME = 'Unknown bot'
 
 /** One bot's app-wide identity. */
 export interface BotIdentity {
@@ -59,9 +60,9 @@ function writeFileAtomic(baseDir: string, appId: string, data: FileShape): void 
 /**
  * Merge a batch of (openId, name) pairs into the app's identity map.
  *
- * - Existing open_ids: keep `firstSeenAt`, `firstSeenChat`, and `source`; bump
- *   `lastSeenAt` and refresh `name`. The first source wins so an explicit
- *   `/introduce` is not downgraded to `observed` by a later passive sighting.
+ * - Existing open_ids: keep `firstSeenAt` and `firstSeenChat`; bump
+ *   `lastSeenAt`, keep the highest-priority `source`, and refresh `name` when
+ *   the new value is a real display name or the old value was only a placeholder.
  * - New open_ids: `firstSeenAt = lastSeenAt = now`, `firstSeenChat = chatId`.
  * - Entries with an empty openId or name are skipped.
  * - Empty / all-skipped input is a no-op (no file write).
@@ -74,14 +75,21 @@ export function recordBotIdentity(
   source: BotIdentitySource,
   now: number,
 ): void {
-  const valid = bots.filter((b) => b.openId && b.name)
+  const valid = bots
+    .map((b) => ({ openId: b.openId, name: normalizeName(b.openId, b.name) }))
+    .filter((b) => b.openId && b.name)
   if (valid.length === 0) return
 
   const data = readFile(baseDir, appId)
   for (const b of valid) {
     const prior = data[b.openId]
     if (prior) {
-      data[b.openId] = { ...prior, name: b.name, lastSeenAt: now }
+      data[b.openId] = {
+        ...prior,
+        name: mergeName(b.openId, prior.name, b.name),
+        source: strongerSource(prior.source, source),
+        lastSeenAt: now,
+      }
     } else {
       data[b.openId] = {
         name: b.name,
@@ -93,6 +101,29 @@ export function recordBotIdentity(
     }
   }
   writeFileAtomic(baseDir, appId, data)
+}
+
+function normalizeName(openId: string, name: string): string {
+  const trimmed = name.trim()
+  if (!trimmed) return ''
+  return trimmed === openId ? UNKNOWN_BOT_NAME : trimmed
+}
+
+function mergeName(openId: string, prior: string, next: string): string {
+  if (isPlaceholderName(openId, next) && !isPlaceholderName(openId, prior)) return prior
+  return next
+}
+
+function isPlaceholderName(openId: string, name: string): boolean {
+  return name === UNKNOWN_BOT_NAME || name === openId
+}
+
+function strongerSource(a: BotIdentitySource, b: BotIdentitySource): BotIdentitySource {
+  return sourceRank(b) > sourceRank(a) ? b : a
+}
+
+function sourceRank(source: BotIdentitySource): number {
+  return source === 'introduce' ? 1 : 0
 }
 
 /** The identity for one open_id, or `undefined` when it is unknown. */

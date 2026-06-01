@@ -52,6 +52,33 @@ describe('recordBotIdentity', () => {
     })
   })
 
+  test('stores an open_id-as-name sighting as a placeholder and backfills a real name later', () => {
+    recordBotIdentity(dir, APP, CHAT, [{ openId: 'ou_b', name: 'ou_b' }], 'observed', NOW)
+    expect(getBotIdentity(dir, APP, 'ou_b')).toMatchObject({
+      name: 'Unknown bot',
+      source: 'observed',
+    })
+
+    recordBotIdentity(dir, APP, CHAT, [{ openId: 'ou_b', name: 'BotB' }], 'observed', NOW + 1)
+    expect(getBotIdentity(dir, APP, 'ou_b')).toMatchObject({
+      name: 'BotB',
+      source: 'observed',
+      firstSeenAt: NOW,
+      lastSeenAt: NOW + 1,
+    })
+  })
+
+  test('does not let a later placeholder overwrite a real name, and upgrades source priority', () => {
+    recordBotIdentity(dir, APP, CHAT, [{ openId: 'ou_b', name: 'BotB' }], 'observed', NOW)
+    recordBotIdentity(dir, APP, CHAT, [{ openId: 'ou_b', name: 'ou_b' }], 'introduce', NOW + 1)
+
+    expect(getBotIdentity(dir, APP, 'ou_b')).toMatchObject({
+      name: 'BotB',
+      source: 'introduce',
+      lastSeenAt: NOW + 1,
+    })
+  })
+
   test('is keyed per appId — another app does not see it', () => {
     recordBotIdentity(dir, 'app_a', CHAT, [{ openId: 'ou_b', name: 'B' }], 'observed', NOW)
     expect(getBotIdentity(dir, 'app_b', 'ou_b')).toBeUndefined()

@@ -73,9 +73,15 @@ describe('observeBotSender', () => {
     expect(getBotIdentity(dir, APP, 'ou_b')?.lastSeenAt).toBe(NOW + 5)
   })
 
-  test('falls back to the open_id as name when the sender name is empty', () => {
+  test('records a placeholder name when the sender name is empty', () => {
     observeBotSender(dir, APP, CHAT, { senderType: 'bot', senderOpenId: 'ou_b', senderName: '', botOpenId: SELF, now: NOW })
-    expect(getBotIdentity(dir, APP, 'ou_b')?.name).toBe('ou_b')
+    expect(getBotIdentity(dir, APP, 'ou_b')?.name).toBe('Unknown bot')
+  })
+
+  test('backfills a placeholder once a later sighting has a real display name', () => {
+    observeBotSender(dir, APP, CHAT, { senderType: 'bot', senderOpenId: 'ou_b', senderName: '', botOpenId: SELF, now: NOW })
+    observeBotSender(dir, APP, CHAT, { senderType: 'bot', senderOpenId: 'ou_b', senderName: 'BotB', botOpenId: SELF, now: NOW + 1 })
+    expect(getBotIdentity(dir, APP, 'ou_b')?.name).toBe('BotB')
   })
 })
 

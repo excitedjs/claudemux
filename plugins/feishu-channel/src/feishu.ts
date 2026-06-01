@@ -22,6 +22,7 @@ import * as lark from '@larksuiteoapi/node-sdk'
 import {
   connectionErrorLogLine,
   reconnectedLogLine,
+  reconnectExhaustedLogLine,
   reconnectingLogLine,
   startupTimeoutLogLine,
 } from './connection'
@@ -42,6 +43,12 @@ const WS_HANDSHAKE_TIMEOUT_MS = 15_000
  * loop, so the channel cuts the attempt off.
  */
 const WS_STARTUP_GRACE_MS = 30_000
+
+/** Maximum SDK reconnect attempts after an established connection drops. */
+export const WS_RUNNING_RECONNECT_MAX_ATTEMPTS = 5
+
+/** How often to inspect the SDK reconnect loop while it is running. */
+const WS_RUNNING_RECONNECT_POLL_MS = 1_000
 
 /**
  * How often a stood-by process retries the single-instance lock. Sets the
@@ -348,6 +355,56 @@ export interface FeishuTransportOptions {
    * lock-free startup without opening a real socket.
    */
   openInboundForTest?: (routes: InboundRoutes) => Promise<void>
+  /** Test seam for the inbound WebSocket client. */
+  wsClientForTest?: (params: ConstructorParameters<typeof lark.WSClient>[0]) => InboundWsClient
+  /** Test seam for the initial connection grace window. */
+  startupGraceMs?: number
+  /**
+   * Called when an established WebSocket cannot reconnect within the bounded
+   * retry budget. The daemon uses this to exit so a fresh proxy can restart it.
+   */
+  onRunningReconnectExhausted?: (attempts: number) => void
+  /**
+   * Called when an established WebSocket reaches a terminal SDK error. Startup
+   * failures throw instead, so daemon startup can release its socket and locks
+   * before the process exits.
+   */
+  onTerminalConnectionError?: (err: Error) => void
+  /** Test seam for the running reconnect watchdog. */
+  runningReconnectMaxAttempts?: number
+  /** Test seam for the reconnect watchdog poll cadence. */
+  runningReconnectPollMs?: number
+}
+
+interface ReconnectStatus {
+  state: string
+  reconnectAttempts: number
+}
+
+interface ReconnectGuardWs {
+  getConnectionStatus(): ReconnectStatus
+  close(params?: { force?: boolean }): void
+}
+
+interface InboundWsClient extends ReconnectGuardWs {
+  start(params: { eventDispatcher: lark.EventDispatcher }): Promise<void>
+}
+
+export interface RunningReconnectGuard {
+  reconnecting(): void
+  reconnected(): void
+  errored(): void
+  stop(): void
+}
+
+export interface RunningReconnectGuardDeps {
+  ws: ReconnectGuardWs
+  maxAttempts?: number
+  pollMs?: number
+  logConnection?(line: string): void
+  onExhausted?(attempts: number): void
+  setIntervalFn?: typeof setInterval
+  clearIntervalFn?: typeof clearInterval
 }
 
 /**
@@ -372,7 +429,8 @@ export function createFeishuTransport(
       appSecret: creds.appSecret,
       logger: sdkLogger,
     })
-  let wsClient: lark.WSClient | undefined
+  let wsClient: InboundWsClient | undefined
+  let runningReconnectGuard: RunningReconnectGuard | undefined
   let resolvedBotOpenId: string | undefined
   /** Poll handle while standing by for the lock; `undefined` once primary. */
   let standbyTimer: ReturnType<typeof setInterval> | undefined
@@ -401,7 +459,9 @@ export function createFeishuTransport(
       markReady = resolve
     })
 
-    const ws = new lark.WSClient({
+    let startupComplete = false
+    const createWs = options.wsClientForTest ?? ((params) => new lark.WSClient(params))
+    const ws = createWs({
       appId: creds.appId,
       appSecret: creds.appSecret,
       // Route the SDK's own logging to stderr — see `sdkLogger`.
@@ -417,11 +477,22 @@ export function createFeishuTransport(
         logConnection('Feishu WebSocket connection is ready')
         markReady()
       },
-      onReconnecting: () => logConnection(reconnectingLogLine()),
-      onReconnected: () => logConnection(reconnectedLogLine()),
-      onError: (err) => logConnection(connectionErrorLogLine(err)),
+      onReconnecting: () => runningReconnectGuard?.reconnecting(),
+      onReconnected: () => runningReconnectGuard?.reconnected(),
+      onError: (err) => {
+        runningReconnectGuard?.errored()
+        logConnection(connectionErrorLogLine(err))
+        if (startupComplete) options.onTerminalConnectionError?.(err)
+      },
     })
     wsClient = ws
+    runningReconnectGuard = createRunningReconnectGuard({
+      ws,
+      maxAttempts: options.runningReconnectMaxAttempts,
+      pollMs: options.runningReconnectPollMs,
+      logConnection,
+      onExhausted: options.onRunningReconnectExhausted,
+    })
 
     void ws.start({ eventDispatcher: dispatcher }).catch((err: unknown) => {
       logConnection(connectionErrorLogLine(err))
@@ -432,12 +503,17 @@ export function createFeishuTransport(
     // Feishu that is unreachable at startup spins a tight retry loop.
     // Give the initial connection a grace window; if it is still not up,
     // stop it so the loop does not run unbounded and unobserved.
-    const cameUp = await raceConnectionReady(ready)
+    const cameUp = await raceConnectionReady(ready, options.startupGraceMs ?? WS_STARTUP_GRACE_MS)
     if (!cameUp) {
       const gaveUp = ws.getConnectionStatus().state === 'failed'
-      logConnection(startupTimeoutLogLine(WS_STARTUP_GRACE_MS, gaveUp))
+      const line = startupTimeoutLogLine(options.startupGraceMs ?? WS_STARTUP_GRACE_MS, gaveUp)
+      logConnection(line)
       ws.close()
+      runningReconnectGuard?.stop()
+      runningReconnectGuard = undefined
+      throw new Error(line)
     }
+    startupComplete = true
   }
 
   return {
@@ -621,6 +697,8 @@ export function createFeishuTransport(
         standbyTimer = undefined
       }
       try {
+        runningReconnectGuard?.stop()
+        runningReconnectGuard = undefined
         wsClient?.close()
       } catch (err) {
         // A close on an already-closed socket is expected; anything else
@@ -637,6 +715,53 @@ export function createFeishuTransport(
         holdsLock = false
       }
     },
+  }
+}
+
+export function createRunningReconnectGuard(deps: RunningReconnectGuardDeps): RunningReconnectGuard {
+  const maxAttempts = deps.maxAttempts ?? WS_RUNNING_RECONNECT_MAX_ATTEMPTS
+  const pollMs = deps.pollMs ?? WS_RUNNING_RECONNECT_POLL_MS
+  const setIntervalFn = deps.setIntervalFn ?? setInterval
+  const clearIntervalFn = deps.clearIntervalFn ?? clearInterval
+  const log = deps.logConnection ?? (() => {})
+  let timer: ReturnType<typeof setInterval> | undefined
+  let exhausted = false
+
+  const stop = (): void => {
+    if (!timer) return
+    clearIntervalFn(timer)
+    timer = undefined
+  }
+
+  return {
+    reconnecting() {
+      log(reconnectingLogLine())
+      if (timer || exhausted) return
+      timer = setIntervalFn(() => {
+        const status = deps.ws.getConnectionStatus()
+        if (status.state !== 'reconnecting') return
+        if (status.reconnectAttempts < maxAttempts) return
+
+        exhausted = true
+        stop()
+        log(reconnectExhaustedLogLine(status.reconnectAttempts))
+        deps.ws.close({ force: true })
+        deps.onExhausted?.(status.reconnectAttempts)
+      }, pollMs)
+      timer.unref?.()
+    },
+
+    reconnected() {
+      stop()
+      exhausted = false
+      log(reconnectedLogLine())
+    },
+
+    errored() {
+      stop()
+    },
+
+    stop,
   }
 }
 
@@ -702,9 +827,9 @@ function logConnection(line: string): void {
  * if the window elapses first. The timer is cleared on the winning path so it
  * does not keep the process alive after the race is decided.
  */
-function raceConnectionReady(ready: Promise<void>): Promise<boolean> {
+function raceConnectionReady(ready: Promise<void>, graceMs: number): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
-    const timer = setTimeout(() => resolve(false), WS_STARTUP_GRACE_MS)
+    const timer = setTimeout(() => resolve(false), graceMs)
     void ready.then(() => {
       clearTimeout(timer)
       resolve(true)

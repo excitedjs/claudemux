@@ -12,6 +12,7 @@ import {
   FEISHU_CARD_CONTENT_SAFE_BYTES,
   commentFromBatchQuery,
   createFeishuTransport,
+  createRunningReconnectGuard,
 } from '../src/feishu'
 
 /**
@@ -214,6 +215,91 @@ describe('createFeishuTransport — inbound startup', () => {
     await transport.start(routes)
 
     expect(openInboundForTest).toHaveBeenCalledWith(routes)
+  })
+
+  test('rejects startup when the WebSocket never becomes ready', async () => {
+    const stub = stubClient()
+    const close = vi.fn()
+    const start = vi.fn(async () => {})
+    const transport = buildTransport(stub, {
+      singleInstance: false,
+      startupGraceMs: 0,
+      wsClientForTest: () => ({
+        start,
+        close,
+        getConnectionStatus: () => ({ state: 'connecting', reconnectAttempts: 0 }),
+      }),
+    })
+
+    await expect(transport.start({ 'im.message.receive_v1': async () => {} })).rejects.toThrow(
+      'Feishu connection did not come up',
+    )
+
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  test('reports terminal connection errors after startup', async () => {
+    const stub = stubClient()
+    const onTerminalConnectionError = vi.fn()
+    let onError: ((err: Error) => void) | undefined
+    const transport = buildTransport(stub, {
+      singleInstance: false,
+      onTerminalConnectionError,
+      wsClientForTest: (params) => {
+        onError = params.onError
+        return {
+          start: vi.fn(async () => params.onReady?.()),
+          close: vi.fn(),
+          getConnectionStatus: () => ({ state: 'connected', reconnectAttempts: 0 }),
+        }
+      },
+    })
+
+    await transport.start({ 'im.message.receive_v1': async () => {} })
+    const err = new Error('terminal')
+    onError?.(err)
+
+    expect(onTerminalConnectionError).toHaveBeenCalledWith(err)
+  })
+})
+
+describe('running reconnect guard', () => {
+  test('stops the SDK reconnect loop once the attempt budget is exhausted', () => {
+    let attempts = 0
+    let poll: (() => void) | undefined
+    const logs: string[] = []
+    const onExhausted = vi.fn()
+    const close = vi.fn()
+    const clearIntervalFn = vi.fn()
+
+    const guard = createRunningReconnectGuard({
+      ws: {
+        getConnectionStatus: () => ({ state: 'reconnecting', reconnectAttempts: attempts }),
+        close,
+      },
+      maxAttempts: 3,
+      pollMs: 1,
+      logConnection: (line) => logs.push(line),
+      onExhausted,
+      setIntervalFn: ((fn: () => void) => {
+        poll = fn
+        return { unref: vi.fn() } as unknown as ReturnType<typeof setInterval>
+      }) as typeof setInterval,
+      clearIntervalFn,
+    })
+
+    guard.reconnecting()
+    attempts = 2
+    poll?.()
+    expect(close).not.toHaveBeenCalled()
+
+    attempts = 3
+    poll?.()
+    expect(close).toHaveBeenCalledWith({ force: true })
+    expect(onExhausted).toHaveBeenCalledWith(3)
+    expect(clearIntervalFn).toHaveBeenCalledTimes(1)
+    expect(logs.some((line) => line.includes('3 reconnect attempts'))).toBe(true)
   })
 })
 

@@ -53,8 +53,14 @@ export function observeBotSender(
   if (!input.senderOpenId) return
   if (input.botOpenId !== undefined && input.senderOpenId === input.botOpenId) return
 
-  const name = input.senderName || input.senderOpenId
-  recordBotIdentity(baseDir, appId, chatId, [{ openId: input.senderOpenId, name }], 'observed', input.now)
+  recordBotIdentity(
+    baseDir,
+    appId,
+    chatId,
+    [{ openId: input.senderOpenId, name: input.senderName || input.senderOpenId }],
+    'observed',
+    input.now,
+  )
   const { wasNew } = recordChatMember(baseDir, appId, chatId, input.senderOpenId)
   if (wasNew) enqueuePendingNewBot(baseDir, appId, chatId, input.senderOpenId)
 }

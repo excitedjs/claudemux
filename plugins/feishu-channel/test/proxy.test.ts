@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
@@ -35,7 +36,7 @@ function fakeMcp() {
   return { server, handlers, notifications }
 }
 
-const CURRENT_PLUGIN_VERSION = readPluginVersion(new URL('..', import.meta.url).pathname)
+const CURRENT_PLUGIN_VERSION = readPluginVersion(fileURLToPath(new URL('..', import.meta.url)))
 const OLDER_PLUGIN_VERSION = isOlderPluginVersion('0.0.0', CURRENT_PLUGIN_VERSION)
   ? '0.0.0'
   : '0.0.0-alpha'

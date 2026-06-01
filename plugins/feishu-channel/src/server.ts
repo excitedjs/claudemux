@@ -610,7 +610,14 @@ async function runDaemonMain(): Promise<void> {
   mkdirSync(base, { recursive: true })
   const credentials = loadCredentials(envFile(base))
   const socketPath = daemonSocketFile(base)
-  const transport = createFeishuTransport(credentials, lockFile(base), { singleInstance: false })
+  const restartDaemon = () => {
+    void shutdown.shutdown(1)
+  }
+  const transport = createFeishuTransport(credentials, lockFile(base), {
+    singleInstance: false,
+    onRunningReconnectExhausted: restartDaemon,
+    onTerminalConnectionError: restartDaemon,
+  })
   const self: DaemonLockRecord = {
     pid: process.pid,
     startedAt: Date.now(),

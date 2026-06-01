@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import {
   connectionErrorLogLine,
   reconnectedLogLine,
+  reconnectExhaustedLogLine,
   reconnectingLogLine,
   startupTimeoutLogLine,
 } from '../src/connection'
@@ -13,6 +14,15 @@ describe('reconnectingLogLine / reconnectedLogLine', () => {
 
   test('reconnected reports the connection is back', () => {
     expect(reconnectedLogLine().toLowerCase()).toContain('re-established')
+  })
+})
+
+describe('reconnectExhaustedLogLine', () => {
+  test('reports the exhausted attempt count', () => {
+    const line = reconnectExhaustedLogLine(5)
+    expect(line).toContain('5')
+    expect(line.toLowerCase()).toContain('reconnect')
+    expect(line).toContain('restarts')
   })
 })
 
