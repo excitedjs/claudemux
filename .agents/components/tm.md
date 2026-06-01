@@ -85,10 +85,12 @@ protocol. Each has its own decision record — see
   survives Bash-tool cwd drift. `tm doctor` reports the resolved value.
 - Remote Control is a per-teammate `tm spawn` concern, distinct from the
   user-global `remoteControlAtStartup` (which would also enable it for the
-  dispatcher and every unrelated `claude`). `tm spawn --remote-control` /
-  `--no-remote-control` injects or suppresses `claude --remote-control` for
-  that one teammate through the Claude engine's launch flags;
-  `CLAUDEMUX_REMOTE_CONTROL` (read once per invocation into
+  dispatcher and every unrelated `claude`). `tm spawn --remote-control` adds
+  `claude --remote-control` to that one teammate's launch flags through the
+  Claude engine. `claude` has no reverse switch, so `--no-remote-control` (and
+  the default off) only omits that injection — it cannot override a user-global
+  `remoteControlAtStartup`, which the teammate's `claude` still honors at
+  startup. `CLAUDEMUX_REMOTE_CONTROL` (read once per invocation into
   `NativeEnv.remoteControlTeammates`) is the dispatcher-set default for every
   spawn. Precedence resolves in `cli/parse.ts` `resolveRemoteControl` — explicit
   flag > config > off — and an explicit `--remote-control` is rejected for

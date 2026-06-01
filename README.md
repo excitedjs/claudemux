@@ -57,11 +57,13 @@ directly — no terminal needed.
 Enable Remote Control in whichever scope you want:
 
 - **Per teammate (scoped).** `tm spawn <path> --remote-control` turns it on for
-  just that teammate; `--no-remote-control` forces it off. Set
-  `CLAUDEMUX_REMOTE_CONTROL=1` in the dispatcher's `.claude/settings.json` env
-  block to make it the default for every `tm spawn`. This keeps the dispatcher
-  and any unrelated `claude` sessions off Remote Control — a per-spawn flag
-  always overrides the config (precedence: explicit flag > config > off).
+  just that teammate; `--no-remote-control` keeps claudemux from enabling it
+  (it does not suppress a user-global `remoteControlAtStartup`, which `claude`
+  still honors — see below). Set `CLAUDEMUX_REMOTE_CONTROL=1` in the
+  dispatcher's `.claude/settings.json` env block to make it the default for
+  every `tm spawn`. This keeps the dispatcher and any unrelated `claude`
+  sessions off Remote Control — a per-spawn flag always overrides the config
+  (precedence: explicit flag > config > off).
 - **Everything (global).** `/claudemux:setup` can flip on Claude Code's
   user-global `remoteControlAtStartup`, so every `claude` session — dispatcher
   and teammates alike — registers a URL the moment it starts.
@@ -132,7 +134,7 @@ globally unique.
 |---|---|
 | `tm ls` | List teammates: `NAME REPO WORKTREE ENGINE STATE`. |
 | `tm states` | Fleet snapshot: `NAME REPO WORKTREE ENGINE STATE LAST PREVIEW` — `state` reports `idle` / `busy` / `borrowed` / `unknown`. |
-| `tm spawn <path> [--name <id>] [--intent "…"] [--engine claude\|codex] [--prompt "…"] [--no-worktree] [--remote-control] [--no-preamble] [--timeout N]` | Launch a teammate in `<path>` (absolute or relative to the dispatcher dir). Default places the teammate inside a git worktree at `<path>/.claude/worktrees/<name>/` (branch `worktree-<name>`, base ref `HEAD`); `--no-worktree` runs in `<path>` itself. `--name <id>` sets the explicit identifier (globally unique); omit it for an auto-generated `<basename(path)>-<rand4>`. `--intent` records a short queryable subject for `tm history`. `--remote-control` / `--no-remote-control` enables/disables Claude Remote Control for just this teammate (overriding the `CLAUDEMUX_REMOTE_CONTROL` config default; Claude-only). When a [prompt preamble](#prompt-preamble) profile is configured, a fresh `--prompt` spawn prepends the matching repo's standing reminder; `--no-preamble` opts that spawn out. With `--prompt`, atomic bootstrap: spawn + send + wait + print the first-turn reply on stdout. |
+| `tm spawn <path> [--name <id>] [--intent "…"] [--engine claude\|codex] [--prompt "…"] [--no-worktree] [--remote-control] [--no-preamble] [--timeout N]` | Launch a teammate in `<path>` (absolute or relative to the dispatcher dir). Default places the teammate inside a git worktree at `<path>/.claude/worktrees/<name>/` (branch `worktree-<name>`, base ref `HEAD`); `--no-worktree` runs in `<path>` itself. `--name <id>` sets the explicit identifier (globally unique); omit it for an auto-generated `<basename(path)>-<rand4>`. `--intent` records a short queryable subject for `tm history`. `--remote-control` enables Claude Remote Control for just this teammate; `--no-remote-control` leaves it off (both override the `CLAUDEMUX_REMOTE_CONTROL` config default, but neither can suppress a user-global `remoteControlAtStartup`; Claude-only). When a [prompt preamble](#prompt-preamble) profile is configured, a fresh `--prompt` spawn prepends the matching repo's standing reminder; `--no-preamble` opts that spawn out. With `--prompt`, atomic bootstrap: spawn + send + wait + print the first-turn reply on stdout. |
 | `tm resume <name> [<sid-or-thread-id>] [--prompt "…"] [--engine claude\|codex]` / `tm resume --engine <e> --repo <path> --id <id> [--name <fresh>]` | Resume a prior conversation by teammate name, or resume an orphaned `tm history` row by repo/id. `--id` accepts a full id or an unambiguous prefix. `--prompt` sends a follow-up after relaunch (atomic like `spawn --prompt`). |
 | `tm send <name> --prompt "…" [--pane-quiet] [--timeout N]` | **Atomic round-trip**: send prompt + wait for the Stop hook + print the reply on stdout. The Stop-hook path also echoes the teammate's post-turn ctx to stderr (`ctx: N tokens · …`), eliminating the common "send, then `tm ctx`" follow-up; skipped on `--pane-quiet`. `--prompt` matches the calling form of `tm spawn --prompt` / `tm resume --prompt`; flag order is free. `--pane-quiet` fallback for TUI-only commands (`/help`, `/effort`, permission prompts) that fire no hook. Exit codes: `0` reply landed; `124` sync wait expired and the teammate is still running (re-collect with `tm wait <name>`; do NOT respawn — the name is taken); `1` real failure (no session, sid marker missing, …). |
 | `tm wait <name> [timeout=600] [--fresh] [--pane-quiet] [--timeout N]` | Block until the teammate's next Stop event and print the reply (ctx echo on stderr, same as `tm send`). Use when an external actor (Remote Control, mobile app, cron) drove the turn. `--fresh` waits for the NEXT Stop instead of returning on a stale marker (no-op under `--pane-quiet`). `--timeout N` is equivalent to the positional `[timeout]`. Same exit codes as `tm send`. |
