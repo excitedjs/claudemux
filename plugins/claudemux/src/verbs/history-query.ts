@@ -1,25 +1,31 @@
 import {
-  readdirSync,
   readFileSync,
   realpathSync,
-  statSync,
 } from 'node:fs'
 import { basename, isAbsolute, join } from 'node:path'
 
 import type { EngineKind, TeammateListing } from '../engines/types'
-import { readCodexRolloutSnapshot, listCodexRolloutFiles } from '../engines/codex/rollout'
-import { codexHistoryPromptFromEntry } from '../engines/codex/history-prompt'
+import { rowsFromClaudeHistorySource } from '../engines/claude/history'
+import { rowsFromCodexHistorySource } from '../engines/codex/history'
+import {
+  isoHistoryTime,
+  parseHistoryTimeMs,
+  type HistoryCandidateRow,
+  type HistoryQueryRow,
+  type HistoryRowWithSort,
+} from '../history/source'
 import {
   listHistoryIndexRecords,
   type HistoryCloseStatus,
-  type HistoryCreatedAtSource,
   type HistoryRuntimeState,
   type HistorySource,
 } from '../persistence/history-index'
 import { listArchived } from '../persistence/identity-store'
-import { encodeProjectDir, sidFile, worktreeBranchFor } from '../persistence/paths'
+import { sidFile, worktreeBranchFor } from '../persistence/paths'
 import type { NativeEnv } from '../env'
 import type { TmResult } from '../tm'
+
+export type { HistoryQueryRow } from '../history/source'
 
 export type HistoryFormat = 'json' | 'oneline' | 'table'
 
@@ -37,36 +43,6 @@ export interface HistoryQuery {
   readonly cursor: number
   readonly fields: readonly string[] | null
   readonly format: HistoryFormat
-}
-
-export interface HistoryQueryRow {
-  readonly id: string | null
-  readonly engine: EngineKind
-  readonly name: string | null
-  readonly repo: string | null
-  readonly cwd: string | null
-  readonly worktreeSlug: string | null
-  readonly branch: string | null
-  readonly baseRef: string | null
-  readonly createdAt: string | null
-  readonly createdAtSource: HistoryCreatedAtSource
-  readonly lastSeenAt: string | null
-  readonly state: HistoryRuntimeState
-  readonly intent: string | null
-  readonly closeStatus: HistoryCloseStatus | null
-  readonly closeNotePreview: string | null
-  readonly lastAssistantPreview: string | null
-  readonly resumeCommand: string | null
-  readonly source: HistorySource
-  readonly topic: string | null
-  readonly path: string | null
-  readonly sizeBytes: number | null
-}
-
-interface RowWithSort {
-  readonly row: Omit<HistoryQueryRow, 'resumeCommand'> & { readonly resumeCommand?: string | null }
-  readonly createdAtMs: number | null
-  readonly lastSeenAtMs: number | null
 }
 
 export const HISTORY_JSON_FIELDS = [
@@ -95,38 +71,8 @@ export const HISTORY_JSON_FIELDS = [
 
 const FIELD_SET = new Set<string>(HISTORY_JSON_FIELDS)
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function stringProp(obj: Record<string, unknown>, key: string): string | null {
-  const value = obj[key]
-  return typeof value === 'string' ? value : null
-}
-
-function cleanPreview(text: string | null, limit = 300): string | null {
-  if (text === null || text.length === 0) return null
-  const first = text.split('\n')[0] ?? ''
-  const stripped = [...first].filter((ch) => (ch.codePointAt(0) ?? 0) > 0x1f)
-  if (stripped.length <= limit) return stripped.join('')
-  return `${stripped.slice(0, limit).join('')}...`
-}
-
 function shellSingleQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
-}
-
-function parseTimeMs(value: string | null): number | null {
-  if (value === null || value.length === 0) return null
-  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(value)
-    ? `${value.replace(' ', 'T')}Z`
-    : value
-  const parsed = Date.parse(normalized)
-  return Number.isFinite(parsed) ? parsed : null
-}
-
-function iso(ms: number | null): string | null {
-  return ms === null || !Number.isFinite(ms) ? null : new Date(ms).toISOString()
 }
 
 function comparablePath(path: string): string {
@@ -135,10 +81,6 @@ function comparablePath(path: string): string {
   } catch {
     return path
   }
-}
-
-function projectDirForCwd(projectsDir: string, cwd: string): string {
-  return join(projectsDir, encodeProjectDir(comparablePath(cwd)))
 }
 
 function repoLeaf(path: string | null): string | null {
@@ -194,7 +136,7 @@ function rowScoreSource(source: HistorySource): number {
   }
 }
 
-function mergeRows(a: RowWithSort, b: RowWithSort): RowWithSort {
+function mergeRows(a: HistoryRowWithSort, b: HistoryRowWithSort): HistoryRowWithSort {
   const row = {
     id: a.row.id ?? b.row.id,
     engine: a.row.engine,
@@ -217,7 +159,7 @@ function mergeRows(a: RowWithSort, b: RowWithSort): RowWithSort {
     topic: a.row.topic ?? b.row.topic,
     path: a.row.path ?? b.row.path,
     sizeBytes: a.row.sizeBytes ?? b.row.sizeBytes,
-  } satisfies Omit<HistoryQueryRow, 'resumeCommand'> & { readonly resumeCommand?: string | null }
+  } satisfies HistoryCandidateRow
   return {
     row,
     createdAtMs: a.createdAtMs ?? b.createdAtMs,
@@ -234,105 +176,6 @@ function rankState(state: HistoryRuntimeState): number {
     case 'orphaned': return 2
     case 'unknown': return 1
   }
-}
-
-function promptFromClaudeEntry(entry: Record<string, unknown>): string | null {
-  const message = entry['message']
-  if (!isPlainObject(message) || message['role'] !== 'user') return null
-  const content = message['content']
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return null
-  const parts: string[] = []
-  for (const item of content) {
-    if (!isPlainObject(item) || item['type'] !== 'text') continue
-    const text = stringProp(item, 'text')
-    if (text !== null) parts.push(text)
-  }
-  return parts.length === 0 ? null : parts.join(' ')
-}
-
-function assistantFromClaudeEntry(entry: Record<string, unknown>): string | null {
-  const message = entry['message']
-  if (!isPlainObject(message)) return null
-  const content = message['content']
-  if (!Array.isArray(content)) return null
-  const parts: string[] = []
-  for (const item of content) {
-    if (!isPlainObject(item) || item['type'] !== 'text') continue
-    const text = stringProp(item, 'text')
-    if (text !== null) parts.push(text)
-  }
-  return parts.length === 0 ? null : parts.join('\n')
-}
-
-function readClaudeTranscript(path: string): {
-  readonly firstPrompt: string | null
-  readonly lastAssistant: string | null
-  readonly createdAt: string | null
-  readonly createdAtMs: number | null
-} {
-  let raw: string
-  try {
-    raw = readFileSync(path, 'utf8')
-  } catch {
-    return { firstPrompt: null, lastAssistant: null, createdAt: null, createdAtMs: null }
-  }
-  let firstPrompt: string | null = null
-  let lastAssistant: string | null = null
-  let firstTs: string | null = null
-  for (const line of raw.split('\n')) {
-    if (line.trim().length === 0) continue
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(line)
-    } catch {
-      continue
-    }
-    if (!isPlainObject(parsed)) continue
-    if (firstTs === null) firstTs = stringProp(parsed, 'timestamp')
-    if (parsed['type'] === 'user' && firstPrompt === null) firstPrompt = promptFromClaudeEntry(parsed)
-    if (parsed['type'] === 'assistant') lastAssistant = assistantFromClaudeEntry(parsed) ?? lastAssistant
-  }
-  const createdAtMs = parseTimeMs(firstTs)
-  return { firstPrompt, lastAssistant, createdAt: firstTs, createdAtMs }
-}
-
-function cwdFromCodexEntry(entry: unknown): string | null {
-  if (!isPlainObject(entry)) return null
-  const payload = entry['payload']
-  if (!isPlainObject(payload)) return null
-  return stringProp(payload, 'cwd')
-}
-
-function readCodexHeader(path: string): {
-  readonly cwd: string | null
-  readonly firstPrompt: string | null
-  readonly createdAt: string | null
-  readonly createdAtMs: number | null
-} {
-  let raw: string
-  try {
-    raw = readFileSync(path, 'utf8')
-  } catch {
-    return { cwd: null, firstPrompt: null, createdAt: null, createdAtMs: null }
-  }
-  let cwd: string | null = null
-  let firstPrompt: string | null = null
-  let createdAt: string | null = null
-  for (const line of raw.split('\n')) {
-    if (line.trim().length === 0) continue
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(line)
-    } catch {
-      continue
-    }
-    if (createdAt === null && isPlainObject(parsed)) createdAt = stringProp(parsed, 'timestamp')
-    cwd = cwd ?? cwdFromCodexEntry(parsed)
-    firstPrompt = firstPrompt ?? codexHistoryPromptFromEntry(parsed)
-    if (cwd !== null && firstPrompt !== null && createdAt !== null) break
-  }
-  return { cwd, firstPrompt, createdAt, createdAtMs: parseTimeMs(createdAt) }
 }
 
 function liveIdFor(listing: TeammateListing): string | null {
@@ -367,8 +210,8 @@ function withResumeCommand(row: Omit<HistoryQueryRow, 'resumeCommand'> & { reado
   return { ...row, resumeCommand: parts.join(' ') }
 }
 
-function normalizeRows(rows: readonly RowWithSort[]): readonly RowWithSort[] {
-  const map = new Map<string, RowWithSort>()
+function normalizeRows(rows: readonly HistoryRowWithSort[]): readonly HistoryRowWithSort[] {
+  const map = new Map<string, HistoryRowWithSort>()
   for (const candidate of rows) {
     const key = rowKey(withResumeCommand(candidate.row))
     const existing = map.get(key)
@@ -381,11 +224,11 @@ function normalizeRows(rows: readonly RowWithSort[]): readonly RowWithSort[] {
   })
 }
 
-function rowsFromIndex(): RowWithSort[] {
+function rowsFromIndex(): HistoryRowWithSort[] {
   return listHistoryIndexRecords()
     .filter((record) => record.engine !== null)
     .map((record) => {
-      const createdAtMs = parseTimeMs(record.createdAt)
+      const createdAtMs = parseHistoryTimeMs(record.createdAt)
       return {
         row: {
           id: record.id,
@@ -415,7 +258,7 @@ function rowsFromIndex(): RowWithSort[] {
     })
 }
 
-function rowsFromListings(listings: readonly TeammateListing[]): RowWithSort[] {
+function rowsFromListings(listings: readonly TeammateListing[]): HistoryRowWithSort[] {
   return listings.map((listing) => {
     const id = liveIdFor(listing)
     const now = Date.now()
@@ -431,7 +274,7 @@ function rowsFromListings(listings: readonly TeammateListing[]): RowWithSort[] {
         baseRef: null,
         createdAt: null,
         createdAtSource: 'unknown',
-        lastSeenAt: iso(now),
+        lastSeenAt: isoHistoryTime(now),
         state: listing.state === 'killed' ? 'killed' : listing.state,
         intent: listing.displayName,
         closeStatus: null,
@@ -448,7 +291,7 @@ function rowsFromListings(listings: readonly TeammateListing[]): RowWithSort[] {
   })
 }
 
-function rowsFromArchived(): RowWithSort[] {
+function rowsFromArchived(): HistoryRowWithSort[] {
   return listArchived().map((record) => ({
     row: {
       id: null,
@@ -459,7 +302,7 @@ function rowsFromArchived(): RowWithSort[] {
       worktreeSlug: record.worktreeSlug,
       branch: record.worktreeSlug === null ? null : worktreeBranchFor(record.worktreeSlug),
       baseRef: null,
-      createdAt: iso(record.createdAt * 1000),
+      createdAt: isoHistoryTime(record.createdAt * 1000),
       createdAtSource: 'index',
       lastSeenAt: null,
       state: 'killed',
@@ -477,139 +320,7 @@ function rowsFromArchived(): RowWithSort[] {
   }))
 }
 
-function scanClaudeProject(cwd: string | null, projectDir: string, idPrefix: string | null): RowWithSort[] {
-  let files: string[]
-  try {
-    files = readdirSync(projectDir).filter((file) => file.endsWith('.jsonl'))
-  } catch {
-    return []
-  }
-  const out: RowWithSort[] = []
-  for (const fileName of files) {
-    const id = fileName.replace(/\.jsonl$/, '')
-    if (!idMatches(id, idPrefix)) continue
-    const path = join(projectDir, fileName)
-    let st: ReturnType<typeof statSync>
-    try {
-      st = statSync(path)
-    } catch {
-      continue
-    }
-    const data = readClaudeTranscript(path)
-    const createdAtMs = data.createdAtMs ?? st.mtimeMs
-    const createdAtSource: HistoryCreatedAtSource = data.createdAtMs === null ? 'mtime' : 'jsonl'
-    out.push({
-      row: {
-        id,
-        engine: 'claude',
-        name: null,
-        repo: cwd,
-        cwd,
-        worktreeSlug: null,
-        branch: null,
-        baseRef: null,
-        createdAt: iso(createdAtMs),
-        createdAtSource,
-        lastSeenAt: iso(st.mtimeMs),
-        state: 'orphaned',
-        intent: null,
-        closeStatus: null,
-        closeNotePreview: null,
-        lastAssistantPreview: cleanPreview(data.lastAssistant),
-        source: 'transcript',
-        topic: cleanPreview(data.firstPrompt, 120),
-        path,
-        sizeBytes: st.size,
-      },
-      createdAtMs,
-      lastSeenAtMs: st.mtimeMs,
-    })
-  }
-  return out
-}
-
-function rowsFromClaude(env: NativeEnv, knownCwds: readonly string[], idPrefix: string | null): RowWithSort[] {
-  const out: RowWithSort[] = []
-  const seenProjectDirs = new Set<string>()
-  for (const cwd of knownCwds) {
-    const projectDir = projectDirForCwd(env.projectsDir, cwd)
-    seenProjectDirs.add(projectDir)
-    out.push(...scanClaudeProject(cwd, projectDir, idPrefix))
-  }
-  if (idPrefix !== null) {
-    let dirs: string[]
-    try {
-      dirs = readdirSync(env.projectsDir)
-    } catch {
-      dirs = []
-    }
-    for (const dir of dirs) {
-      const projectDir = join(env.projectsDir, dir)
-      if (seenProjectDirs.has(projectDir)) continue
-      out.push(...scanClaudeProject(null, projectDir, idPrefix))
-    }
-  }
-  return out
-}
-
-function cwdAllowed(cwd: string | null, knownCwds: readonly string[], allowGlobal: boolean): boolean {
-  if (allowGlobal) return true
-  if (cwd === null) return false
-  const comparable = comparablePath(cwd)
-  return knownCwds.some((known) => comparablePath(known) === comparable)
-}
-
-function rowsFromCodex(
-  idPrefix: string | null,
-  knownCwds: readonly string[],
-  allowGlobal: boolean,
-): RowWithSort[] {
-  const out: RowWithSort[] = []
-  for (const file of listCodexRolloutFiles(process.env)) {
-    if (!idMatches(file.threadId, idPrefix)) continue
-    const st = (() => {
-      try {
-        return statSync(file.path)
-      } catch {
-        return null
-      }
-    })()
-    if (st === null) continue
-    const header = readCodexHeader(file.path)
-    if (!cwdAllowed(header.cwd, knownCwds, allowGlobal)) continue
-    const snapshot = readCodexRolloutSnapshot(file.threadId, process.env)
-    const createdAtMs = header.createdAtMs ?? st.mtimeMs
-    out.push({
-      row: {
-        id: file.threadId,
-        engine: 'codex',
-        name: null,
-        repo: header.cwd,
-        cwd: header.cwd,
-        worktreeSlug: null,
-        branch: null,
-        baseRef: null,
-        createdAt: iso(createdAtMs),
-        createdAtSource: header.createdAtMs === null ? 'mtime' : 'jsonl',
-        lastSeenAt: iso(st.mtimeMs),
-        state: 'orphaned',
-        intent: null,
-        closeStatus: null,
-        closeNotePreview: null,
-        lastAssistantPreview: cleanPreview(snapshot?.lastAssistantText ?? null),
-        source: 'rollout',
-        topic: cleanPreview(header.firstPrompt, 120),
-        path: file.path,
-        sizeBytes: st.size,
-      },
-      createdAtMs,
-      lastSeenAtMs: st.mtimeMs,
-    })
-  }
-  return out
-}
-
-function knownCwdsFromRows(rows: readonly RowWithSort[], repoFilter: string | null, repoResolved: string | null): readonly string[] {
+function knownCwdsFromRows(rows: readonly HistoryRowWithSort[], repoFilter: string | null, repoResolved: string | null): readonly string[] {
   const out = new Set<string>()
   for (const { row } of rows) {
     const materialized = withResumeCommand(row)
@@ -621,7 +332,7 @@ function knownCwdsFromRows(rows: readonly RowWithSort[], repoFilter: string | nu
   return [...out]
 }
 
-function filterRows(rows: readonly RowWithSort[], query: HistoryQuery, repoResolved: string | null): readonly RowWithSort[] {
+function filterRows(rows: readonly HistoryRowWithSort[], query: HistoryQuery, repoResolved: string | null): readonly HistoryRowWithSort[] {
   return rows.filter(({ row, createdAtMs }) => {
     const materialized = withResumeCommand(row)
     if (query.engine !== null && materialized.engine !== query.engine) return false
@@ -719,8 +430,17 @@ export async function queryHistory(
   const shouldScanKnownLogs = knownCwds.length > 0
   const allRows = normalizeRows([
     ...baseRows,
-    ...(shouldScanKnownLogs || shouldScanGlobalLogs ? rowsFromClaude(env, knownCwds, query.id) : []),
-    ...(shouldScanKnownLogs || shouldScanGlobalLogs ? rowsFromCodex(query.id, knownCwds, shouldScanGlobalLogs) : []),
+    ...(shouldScanKnownLogs || shouldScanGlobalLogs
+      ? rowsFromClaudeHistorySource({ projectsDir: env.projectsDir, knownCwds, idPrefix: query.id })
+      : []),
+    ...(shouldScanKnownLogs || shouldScanGlobalLogs
+      ? rowsFromCodexHistorySource({
+        idPrefix: query.id,
+        knownCwds,
+        allowGlobal: shouldScanGlobalLogs,
+        env: process.env,
+      })
+      : []),
   ])
   const filtered = filterRows(allRows, query, repoResolved)
   const page = filtered.slice(query.cursor, query.cursor + query.limit)
@@ -743,8 +463,17 @@ export function resolveHistoryId(
   const baseRows = [...rowsFromIndex(), ...rowsFromListings(listings), ...rowsFromArchived()]
   const allRows = normalizeRows([
     ...baseRows,
-    ...rowsFromClaude(env, knownCwdsFromRows(baseRows, null, null), idPrefix),
-    ...rowsFromCodex(idPrefix, [], true),
+    ...rowsFromClaudeHistorySource({
+      projectsDir: env.projectsDir,
+      knownCwds: knownCwdsFromRows(baseRows, null, null),
+      idPrefix,
+    }),
+    ...rowsFromCodexHistorySource({
+      idPrefix,
+      knownCwds: [],
+      allowGlobal: true,
+      env: process.env,
+    }),
   ])
     .filter(({ row }) => idMatches(row.id, idPrefix))
     .map(({ row }) => withResumeCommand(row))

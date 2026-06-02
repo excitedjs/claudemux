@@ -2,8 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 
-import { CodexEngine } from '../../../src/engines/codex/engine'
-import type { EngineContext, TeammateListing } from '../../../src/engines/types'
+import { rowsFromCodexHistorySource } from '../../../src/engines/codex/history'
+import type { TeammateListing } from '../../../src/engines/types'
 import type { NativeEnv } from '../../../src/env'
 import { queryHistory, type HistoryQuery } from '../../../src/verbs/history-query'
 
@@ -84,13 +84,6 @@ function rolloutLines(prompt: string): readonly unknown[] {
   ]
 }
 
-function engineCtx(): EngineContext {
-  return {
-    now: () => Date.parse('2026-05-24T00:00:05.000Z'),
-    env: { CLAUDEMUX_CODEX_SESSIONS_ROOT: sessionsRoot },
-  }
-}
-
 function nativeEnv(): NativeEnv {
   return {
     dispatcherDir: scratch,
@@ -117,20 +110,22 @@ function historyQuery(format: HistoryQuery['format']): HistoryQuery {
 }
 
 describe('Codex history prompt extraction', () => {
-  test('CodexEngine.history skips AGENTS instructions and displays the first real user prompt', async () => {
+  test('Codex history source skips AGENTS instructions and returns the first real user prompt', () => {
     writeRollout(THREAD_ID, rolloutLines('Prompt from tm send'))
-    const engine = new CodexEngine()
 
-    const list = await engine.history({ name: 'worker', cwd: repo, index: null }, engineCtx())
-    expect(list.kind).toBe('list')
-    expect(list.tmResult?.stdout).toContain('Prompt from tm send')
-    expect(list.tmResult?.stdout).not.toContain('# AGENTS.md instructions')
+    const rows = rowsFromCodexHistorySource({
+      idPrefix: null,
+      knownCwds: [repo],
+      allowGlobal: false,
+      env: { CLAUDEMUX_CODEX_SESSIONS_ROOT: sessionsRoot },
+    }).map(({ row }) => row)
 
-    const detail = await engine.history({ name: 'worker', cwd: repo, index: THREAD_ID.slice(0, 8) }, engineCtx())
-    expect(detail.kind).toBe('detail')
-    expect(detail.tmResult?.stdout).toContain('Prompt from tm send')
-    expect(detail.tmResult?.stdout).toContain('assistant after prompt')
-    expect(detail.tmResult?.stdout).not.toContain('# AGENTS.md instructions')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      topic: 'Prompt from tm send',
+      lastAssistantPreview: 'assistant after prompt',
+    })
+    expect(rows[0]?.topic).not.toContain('# AGENTS.md instructions')
   })
 
   test('tm history oneline uses the rollout first real user prompt when intent is implicit', async () => {

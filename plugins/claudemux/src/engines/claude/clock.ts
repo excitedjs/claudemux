@@ -38,11 +38,3 @@ export function fmtLocalDateTime(epochSec: number): string {
     `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
   )
 }
-
-/** Format a second-count as a short relative age — `tm`'s `fmt_age`. */
-export function fmtAge(age: number): string {
-  if (age < 60) return `${age}s`
-  if (age < 3600) return `${Math.floor(age / 60)}m`
-  if (age < 86400) return `${Math.floor(age / 3600)}h`
-  return `${Math.floor(age / 86400)}d`
-}

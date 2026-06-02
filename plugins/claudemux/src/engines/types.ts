@@ -64,7 +64,6 @@ export interface EngineCapabilities {
   readonly atomicSpawnPrompt: boolean
   readonly compaction: 'manual' | 'auto' | 'unsupported'
   readonly contextUsage: 'transcript-jsonl' | 'rpc-token-usage' | 'unsupported'
-  readonly history: 'transcript-files' | 'rpc-thread-list' | 'unsupported'
   readonly memory: 'claude-project-memory' | 'engine-native' | 'unsupported'
   readonly reload: 'prompt-command' | 'native-command' | 'unsupported'
   readonly resume: 'transcript-id' | 'thread-id' | 'unsupported'
@@ -215,7 +214,7 @@ export type ReloadResult =
   | ({ kind: 'not-supported'; reason: string } & RawTmResult)
   | ({ kind: 'failed'; message: string } & RawTmResult)
 
-// ─── Last / Ctx / History / Mem ────────────────────────────────────────
+// ─── Last / Ctx / Mem ──────────────────────────────────────────────────
 
 export interface LastRequest {
   readonly name: TeammateName
@@ -231,35 +230,6 @@ export type ContextResult =
   | ({ kind: 'usage'; tokensUsed: number; tokensTotal: number; pct: number } & RawTmResult)
   | ({ kind: 'not-supported'; reason: string } & RawTmResult)
   | ({ kind: 'failed'; message: string } & RawTmResult)
-
-export interface HistoryRequest {
-  readonly name: TeammateName
-  /** Absolute working directory used by engines whose history is keyed by cwd. */
-  readonly cwd: string | null
-  /** `null` = list view; non-null = engine-specific detail selector. */
-  readonly index: string | null
-}
-
-export type HistoryResult =
-  | ({ kind: 'list'; turns: readonly HistoryTurn[]; entries?: readonly HistoryListEntry[] } & RawTmResult)
-  | ({ kind: 'detail'; turn: HistoryTurn; items: readonly InteractionItem[] } & RawTmResult)
-  | ({ kind: 'not-supported'; reason: string } & RawTmResult)
-  | ({ kind: 'failed'; message: string } & RawTmResult)
-
-export interface HistoryListEntry {
-  readonly engine: EngineKind
-  readonly id: string
-  readonly mtimeMs: number
-  readonly size: number
-  readonly topic: string
-  readonly active: boolean
-}
-
-export interface HistoryTurn {
-  readonly index: number
-  readonly startedAt: number
-  readonly summary: string
-}
 
 export interface MemoryRequest {
   readonly name: TeammateName

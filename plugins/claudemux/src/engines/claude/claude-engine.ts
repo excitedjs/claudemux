@@ -27,8 +27,6 @@ import type {
   EngineContext,
   EngineKind,
   EngineSnapshot,
-  HistoryRequest,
-  HistoryResult,
   InspectRequest,
   KillRequest,
   KillResult,
@@ -54,7 +52,6 @@ import type { NativeEnv } from '../../env'
 import { claudeCompact } from './compact'
 import { claudeCtxLine, claudeCtxUsage } from './ctx'
 import { claudeDoctor } from './doctor'
-import { claudeHistory, claudeHistoryList } from './history'
 import { claudeLast } from './last'
 import { claudeMem } from './mem'
 import { claudeReload } from './reload'
@@ -90,7 +87,6 @@ export const CLAUDE_CAPABILITIES: EngineCapabilities = {
   atomicSpawnPrompt: true,
   compaction: 'manual',
   contextUsage: 'transcript-jsonl',
-  history: 'transcript-files',
   memory: 'claude-project-memory',
   reload: 'prompt-command',
   resume: 'transcript-id',
@@ -690,37 +686,6 @@ export class ClaudeEngine implements Engine {
         stdout: `${claudeCtxLine(req.name, req.windowOverride, this.env)}\n`,
         stderr: '',
       },
-    }
-  }
-
-  async history(req: HistoryRequest, _ctx: EngineContext): Promise<HistoryResult> {
-    // List mode shares one project-dir walk with `claudeHistoryList`;
-    // detail mode keeps the path through `claudeHistory` (which itself
-    // routes to `historyDetail` after a single cwd check). Both modes
-    // use the runtime cwd (worktree path when applicable) — Claude
-    // Code writes transcripts there.
-    const cwd = req.cwd
-    if (req.index === null) {
-      const { tmResult, entries } = await claudeHistoryList(req.name, cwd, this.env)
-      if (tmResult.code !== 0) {
-        return { kind: 'failed', message: rstrip(tmResult.stderr) || rstrip(tmResult.stdout), tmResult }
-      }
-      return {
-        kind: 'list',
-        turns: [{ index: 0, startedAt: 0, summary: rstrip(tmResult.stdout) }],
-        entries,
-        tmResult,
-      }
-    }
-    const result = await claudeHistory([req.name, req.index, cwd ?? ''], this.env)
-    if (result.code !== 0) {
-      return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), tmResult: result }
-    }
-    return {
-      kind: 'list',
-      turns: [{ index: Number(req.index), startedAt: 0, summary: rstrip(result.stdout) }],
-      entries: undefined,
-      tmResult: result,
     }
   }
 

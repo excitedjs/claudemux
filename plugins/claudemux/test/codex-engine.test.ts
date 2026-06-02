@@ -43,7 +43,7 @@ import {
   writeBaseRecord,
 } from '../src/engines/codex/persistence'
 import { CODEX_ROLLOUT_BUSY_WINDOW_MS } from '../src/engines/codex/rollout'
-import { hasCodexHistoryForCwd } from '../src/engines/codex/history'
+import { hasCodexHistoryForCwd, rowsFromCodexHistorySource } from '../src/engines/codex/history'
 import type { EngineContext } from '../src/engines/types'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -66,10 +66,6 @@ function ctx(): EngineContext {
 
 function ctxWithEnv(env: NodeJS.ProcessEnv): EngineContext {
   return { now: () => Date.now(), env }
-}
-
-function ctxAt(nowMs: number): EngineContext {
-  return { now: () => nowMs, env: process.env }
 }
 
 function nameUnder(): string {
@@ -775,7 +771,7 @@ describe.skip('CodexEngine — core lifecycle', () => {
     expect(after.opens).toBe(after.closes)
   })
 
-  test('history list reads codex rollouts for the teammate cwd', async () => {
+  test('history source reads codex rollouts for the teammate cwd', () => {
     const name = nameUnder()
     const activeThreadId = '019e5f5f-2e57-7abc-8def-123456789abc'
     const oldThreadId = '019e5f5f-2e57-7abc-8def-123456789abd'
@@ -800,101 +796,75 @@ describe.skip('CodexEngine — core lifecycle', () => {
     )
 
     try {
-      const result = await engine.history({ name, cwd, index: null }, ctxAt(nowMs))
+      const rows = rowsFromCodexHistorySource({
+        idPrefix: null,
+        knownCwds: [cwd],
+        allowGlobal: false,
+        env: process.env,
+      }).map(({ row }) => row)
 
-      expect(result.kind).toBe('list')
-      expect(result.tmResult?.code).toBe(0)
-      expect(result.tmResult?.stdout).toContain('ENGINE')
-      // List mode now renders the full thread id (was the 8-char prefix);
-      // pin against `activeThreadId` so the test tracks the contract `tm
-      // resume` accepts rather than a now-defunct truncation.
-      expect(result.tmResult?.stdout).toContain(`*  codex   ${activeThreadId}  5s`)
-      expect(result.tmResult?.stdout).toContain('Implement codex history')
-      expect(result.tmResult?.stdout).toContain('Older codex thread')
-      expect(result.tmResult?.stdout).not.toContain('Other repo thread')
+      expect(rows.map((row) => row.id)).toEqual([activeThreadId, oldThreadId])
+      expect(rows[0]).toMatchObject({
+        engine: 'codex',
+        source: 'rollout',
+        cwd,
+        state: 'orphaned',
+        topic: 'Implement codex history',
+        lastAssistantPreview: 'active answer',
+      })
+      expect(rows[1]).toMatchObject({
+        topic: 'Older codex thread',
+        lastAssistantPreview: 'old answer',
+      })
+      expect(rows).not.toContainEqual(expect.objectContaining({ id: otherThreadId }))
     } finally {
       rmSync(otherCwd, { recursive: true, force: true })
     }
   })
 
-  test('history detail expands a codex thread id prefix', async () => {
-    const name = nameUnder()
-    const threadId = '019e5f5f-2e57-7abc-8def-123456789abf'
-    const nowMs = 1_800_000_000_000
-    const rollout = writeRollout(
-      threadId,
-      codexHistoryLines(cwd, 'Resume this codex thread', 'last codex assistant text'),
-      nowMs - 125_000,
-    )
-
-    const result = await engine.history({ name, cwd, index: threadId.slice(0, 8) }, ctxAt(nowMs))
-
-    expect(result.kind).toBe('detail')
-    expect(result.tmResult?.code).toBe(0)
-    expect(result.tmResult?.stdout).toContain(`thread:     ${threadId}`)
-    expect(result.tmResult?.stdout).toContain(`rollout:    ${rollout}`)
-    expect(result.tmResult?.stdout).toContain('created:    2026-05-24 00:00:00')
-    expect(result.tmResult?.stdout).toContain('ctx:        12666 tokens · 6% of 200k')
-    expect(result.tmResult?.stdout).toContain('Resume this codex thread')
-    expect(result.tmResult?.stdout).toContain('last codex assistant text')
-    expect(result.tmResult?.stdout).toContain(`resume: tm resume ${name} ${threadId}`)
-  })
-
-  test('history detail rejects an invalid codex thread prefix', async () => {
-    const result = await engine.history({ name: nameUnder(), cwd, index: 'XYZ-not-hex' }, ctx())
-
-    expect(result.kind).toBe('failed')
-    expect(result.tmResult).toEqual({
-      code: 1,
-      stdout: '',
-      stderr: "tm: history: invalid thread-id prefix 'XYZ-not-hex'\n",
-    })
-  })
-
-  test('history detail asks for a longer prefix when multiple codex threads match', async () => {
-    const name = nameUnder()
+  test('history source filters codex rollout thread id prefixes', () => {
     const firstThreadId = '019e5f5f-1111-7abc-8def-123456789abc'
     const secondThreadId = '019e5f5f-2222-7abc-8def-123456789abc'
     writeRollout(firstThreadId, codexHistoryLines(cwd, 'First match', 'first answer'))
     writeRollout(secondThreadId, codexHistoryLines(cwd, 'Second match', 'second answer'))
 
-    const result = await engine.history({ name, cwd, index: '019e5f5f' }, ctx())
+    const rows = rowsFromCodexHistorySource({
+      idPrefix: '019e5f5f-1111',
+      knownCwds: [cwd],
+      allowGlobal: false,
+      env: process.env,
+    }).map(({ row }) => row)
 
-    expect(result.kind).toBe('failed')
-    expect(result.tmResult?.stderr).toContain("prefix '019e5f5f' matches 2 codex threads")
-    expect(result.tmResult?.stderr).toContain(firstThreadId)
-    expect(result.tmResult?.stderr).toContain(secondThreadId)
+    expect(rows.map((row) => row.id)).toEqual([firstThreadId])
   })
 
-  test('history falls back to response_item user text when event_msg user text is absent', async () => {
-    const name = nameUnder()
+  test('history source falls back to response_item user text when event_msg user text is absent', () => {
     const threadId = '019e5f5f-2e57-7abc-8def-123456789ac2'
     writeRollout(
       threadId,
       codexHistoryResponseItemLines(cwd, 'Prompt from response item', 'assistant response item'),
     )
 
-    const list = await engine.history({ name, cwd, index: null }, ctx())
-    expect(list.kind).toBe('list')
-    expect(list.tmResult?.stdout).toContain('Prompt from response item')
-
-    const detail = await engine.history({ name, cwd, index: threadId.slice(0, 8) }, ctx())
-    expect(detail.kind).toBe('detail')
-    expect(detail.tmResult?.stdout).toContain('Prompt from response item')
-    expect(detail.tmResult?.stdout).toContain('assistant response item')
+    const rows = rowsFromCodexHistorySource({
+      idPrefix: null,
+      knownCwds: [cwd],
+      allowGlobal: false,
+      env: process.env,
+    }).map(({ row }) => row)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      topic: 'Prompt from response item',
+      lastAssistantPreview: 'assistant response item',
+    })
   })
 
-  test('history list returns an empty codex-thread line when no rollout matches the cwd', async () => {
-    const name = nameUnder()
-
-    const result = await engine.history({ name, cwd, index: null }, ctx())
-
-    expect(result.kind).toBe('list')
-    expect(result.tmResult).toEqual({
-      code: 0,
-      stdout: `(no codex threads for ${name})\n`,
-      stderr: '',
-    })
+  test('history source returns no rows when no rollout matches the cwd', () => {
+    expect(rowsFromCodexHistorySource({
+      idPrefix: null,
+      knownCwds: [cwd],
+      allowGlobal: false,
+      env: process.env,
+    })).toEqual([])
   })
 
   test('history routing detects cwd from only the rollout session_meta line', () => {
@@ -909,23 +879,6 @@ describe.skip('CodexEngine — core lifecycle', () => {
     writeFileSync(rollout, `${readFileSync(rollout, 'utf8')}${'x'.repeat(128 * 1024)}\n`)
 
     expect(hasCodexHistoryForCwd(cwd, process.env)).toBe(true)
-  })
-
-  test('history list marks the live codex thread', async () => {
-    const name = nameUnder()
-    const liveThreadId = '019e5f5f-2e57-7abc-8def-123456789ac0'
-    const nowMs = 1_800_000_000_000
-    writeDaemonFiles(name, liveThreadId)
-    writeRollout(
-      liveThreadId,
-      codexHistoryLines(cwd, 'Live codex topic', 'live answer'),
-      nowMs - 10_000,
-    )
-
-    const result = await engine.history({ name, cwd, index: null }, ctxAt(nowMs))
-
-    expect(result.kind).toBe('list')
-    expect(result.tmResult?.stdout).toMatch(/^\*  codex\s+019e5f5f/m)
   })
 
   test('doctor reaps a crashed daemon registry entry', async () => {

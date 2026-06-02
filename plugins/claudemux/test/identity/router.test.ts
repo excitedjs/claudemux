@@ -21,8 +21,6 @@ import type {
   EngineContext,
   EngineKind,
   EngineSnapshot,
-  HistoryRequest,
-  HistoryResult,
   InspectRequest,
   KillRequest,
   KillResult,
@@ -50,7 +48,6 @@ const capabilities: EngineCapabilities = {
   atomicSpawnPrompt: true,
   compaction: 'manual',
   contextUsage: 'transcript-jsonl',
-  history: 'transcript-files',
   memory: 'claude-project-memory',
   reload: 'prompt-command',
   resume: 'transcript-id',
@@ -91,9 +88,6 @@ class StubEngine implements Engine {
     return { kind: 'text', text: '' }
   }
   async ctx(_req: ContextRequest, _ctx: EngineContext): Promise<ContextResult> {
-    return { kind: 'not-supported', reason: 'stub' }
-  }
-  async history(_req: HistoryRequest, _ctx: EngineContext): Promise<HistoryResult> {
     return { kind: 'not-supported', reason: 'stub' }
   }
   async mem(_req: MemoryRequest, _ctx: EngineContext): Promise<TextResult> {

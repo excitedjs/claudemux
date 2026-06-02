@@ -22,8 +22,6 @@ import type {
   EngineContext,
   EngineKind,
   EngineSnapshot,
-  HistoryRequest,
-  HistoryResult,
   InspectRequest,
   InteractionItem,
   KillRequest,
@@ -55,7 +53,6 @@ import type { ThreadStartResponse } from '../../codex-protocol/v2/ThreadStartRes
 import type { ThreadTokenUsage } from '../../codex-protocol/v2/ThreadTokenUsage.js'
 import { EXIT_SYNC_WAIT_EXPIRED, type TmResult } from '../../tm'
 import type { CollectedTurn, TurnCompletedNotification } from './events.js'
-import { codexHistory } from './history.js'
 import { CodexWsClient } from './rpc.js'
 import { runTurn, subscribeTurnCollection } from './events.js'
 import {
@@ -564,7 +561,6 @@ export class CodexEngine implements Engine {
     atomicSpawnPrompt: true,
     compaction: 'auto',
     contextUsage: 'transcript-jsonl',
-    history: 'transcript-files',
     memory: 'unsupported',
     reload: 'unsupported',
     resume: 'thread-id',
@@ -1141,10 +1137,6 @@ export class CodexEngine implements Engine {
       tokensTotal: rollout.tokenUsage.tokensTotal,
       pct: rollout.tokenUsage.pct,
     }
-  }
-
-  async history(_req: HistoryRequest, _ctx: EngineContext): Promise<HistoryResult> {
-    return codexHistory(_req, _ctx)
   }
 
   async mem(_req: MemoryRequest, _ctx: EngineContext): Promise<TextResult> {

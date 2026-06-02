@@ -25,8 +25,6 @@ import type {
   EngineContext,
   EngineKind,
   EngineSnapshot,
-  HistoryRequest,
-  HistoryResult,
   InspectRequest,
   KillRequest,
   KillResult,
@@ -81,7 +79,6 @@ export interface Engine {
   resume(req: ResumeRequest, ctx: EngineContext): Promise<ResumeResult>
   last(req: LastRequest, ctx: EngineContext): Promise<TextResult>
   ctx(req: ContextRequest, ctx: EngineContext): Promise<ContextResult>
-  history(req: HistoryRequest, ctx: EngineContext): Promise<HistoryResult>
   mem(req: MemoryRequest, ctx: EngineContext): Promise<TextResult>
   reload(req: ReloadRequest, ctx: EngineContext): Promise<ReloadResult>
 
