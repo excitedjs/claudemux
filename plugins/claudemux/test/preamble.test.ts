@@ -152,6 +152,40 @@ describe('resolvePreamble — profile lookup', () => {
     expect(r.preamble).toBeNull()
   })
 
+  test('a matched per-repo entry that is not a string fails loud (not a silent opt-out)', () => {
+    writeProfile({ default: 'fallback', repos: { [repo]: 123 } })
+    const r = resolvePreamble(dispatcherDir, repo)
+    expect('error' in r).toBe(true)
+    if (!('error' in r)) throw new Error('expected an error')
+    expect(r.error.stderr).toContain('"repos" entry')
+    expect(r.error.stderr).toContain('must be a string')
+    expect(r.error.stderr).toContain('--no-preamble')
+  })
+
+  test('a non-string default fails loud', () => {
+    writeProfile({ default: 123 })
+    const r = resolvePreamble(dispatcherDir, repo)
+    expect('error' in r).toBe(true)
+    if (!('error' in r)) throw new Error('expected an error')
+    expect(r.error.stderr).toContain('"default" must be a string')
+  })
+
+  test('a non-object repos fails loud', () => {
+    writeProfile({ repos: 'nope' })
+    const r = resolvePreamble(dispatcherDir, repo)
+    expect('error' in r).toBe(true)
+    if (!('error' in r)) throw new Error('expected an error')
+    expect(r.error.stderr).toContain('"repos" must be an object')
+  })
+
+  test('an array repos fails loud', () => {
+    writeProfile({ repos: [] })
+    const r = resolvePreamble(dispatcherDir, repo)
+    expect('error' in r).toBe(true)
+    if (!('error' in r)) throw new Error('expected an error')
+    expect(r.error.stderr).toContain('"repos" must be an object')
+  })
+
   test('trailing whitespace in the preamble is trimmed', () => {
     writeProfile({ default: 'reminder\n\n' })
     const r = resolvePreamble(dispatcherDir, repo)

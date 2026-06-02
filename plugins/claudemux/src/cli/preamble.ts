@@ -40,8 +40,12 @@ export function preambleProfilePath(dispatcherDir: string): string {
 interface PreambleProfile {
   /** Dispatcher-wide default, used when no per-repo entry matches. */
   readonly default?: unknown
-  /** Per-repo preambles, keyed by the repo's `realpath`-resolved path. */
-  readonly repos?: Record<string, unknown>
+  /**
+   * Per-repo preambles, keyed by the repo's `realpath`-resolved path.
+   * Typed `unknown` so the runtime shape checks in `resolvePreamble` are the
+   * source of truth rather than an optimistic cast.
+   */
+  readonly repos?: unknown
 }
 
 /** Trim only trailing whitespace, so a multi-line preamble keeps its shape. */
@@ -49,11 +53,24 @@ function trimEnd(text: string): string {
   return text.replace(/\s+$/, '')
 }
 
-/** A profile entry counts only when it is a non-empty (post-trim) string. */
-function usableText(value: unknown): string | null {
-  if (typeof value !== 'string') return null
+/**
+ * A confirmed-string entry, trailing-trimmed: non-empty text is the preamble,
+ * an empty (or whitespace-only) string is the explicit opt-out (`null`). Type
+ * validation happens before this — a non-string entry is a schema error, not
+ * a silent opt-out.
+ */
+function emptyToNull(value: string): string | null {
   const trimmed = trimEnd(value)
   return trimmed.length > 0 ? trimmed : null
+}
+
+/** A fail-loud schema error for a present-but-malformed profile entry. */
+function schemaError(path: string, detail: string): TmResult {
+  return die(
+    `tm spawn: ${path} ${detail} ` +
+      '(expected { "default": "…", "repos": { "<repo>": "…" } }). ' +
+      'Fix it or pass --no-preamble.',
+  )
 }
 
 /**
@@ -78,7 +95,11 @@ function normalizeKey(key: string): string {
  *    top-level shape → `{ error }` (fail loud: the operator put something
  *    there, so a silently dropped reminder is worse than a clear config
  *    error they can fix).
- *  - Per-repo entry present → that text wins. An explicit empty entry opts
+ *  - A present `repos` that is not a non-array object, or a present
+ *    `default` / matched per-repo entry that is not a string → `{ error }`.
+ *    A wrong-typed entry is a config bug, not an opt-out, so it fails loud
+ *    rather than silently dropping the reminder.
+ *  - Per-repo entry present → that string wins. An explicit empty string opts
  *    that repo out (returns `null`) without falling through to `default`.
  *  - Otherwise → the dispatcher-wide `default`, or `null` when absent.
  *
@@ -133,18 +154,36 @@ export function resolvePreamble(
     }
   }
 
+  // `repos`, when present, must be a non-array object. A matched entry must
+  // be a string (empty = explicit opt-out for that repo); a non-string value
+  // is a schema error, not a silent opt-out.
   const repos = profile.repos
-  if (repos !== undefined && repos !== null && typeof repos === 'object') {
-    for (const key of Object.keys(repos)) {
+  if (repos !== undefined) {
+    if (typeof repos !== 'object' || repos === null || Array.isArray(repos)) {
+      return { error: schemaError(path, '"repos" must be an object mapping repo paths to strings') }
+    }
+    const reposMap = repos as Record<string, unknown>
+    for (const key of Object.keys(reposMap)) {
       if (normalizeKey(key) === repo) {
-        // An explicit (even empty) per-repo entry is authoritative: a blank
-        // value opts the repo out rather than falling back to `default`.
-        return { preamble: usableText(repos[key]) }
+        const value = reposMap[key]
+        if (typeof value !== 'string') {
+          return { error: schemaError(path, `the "repos" entry for ${JSON.stringify(key)} must be a string`) }
+        }
+        return { preamble: emptyToNull(value) }
       }
     }
   }
 
-  return { preamble: usableText(profile.default) }
+  // No per-repo match → the dispatcher-wide `default`, when present. Same
+  // rule: a present `default` must be a string.
+  const fallback = profile.default
+  if (fallback !== undefined) {
+    if (typeof fallback !== 'string') {
+      return { error: schemaError(path, '"default" must be a string') }
+    }
+    return { preamble: emptyToNull(fallback) }
+  }
+  return { preamble: null }
 }
 
 /**
