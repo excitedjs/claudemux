@@ -2,14 +2,18 @@
 # tm — the dispatcher's CLI: tmux teammate manager, plus task-ledger and
 # context-usage helpers for dispatcher bookkeeping.
 #
-# This launcher runs the TypeScript sources under `../src/` directly through
-# Node 22's experimental type-transform pipeline. There is no build step and
-# no `npm install`: the only runtime npm dependency, `ws`, is vendored under
-# `../third_party/ws/` and consumed via the `#ws` subpath in
-# `../package.json`'s `imports` map. A small ESM resolve hook
+# In a source plugin checkout, this launcher runs the TypeScript sources under
+# `../src/` directly through Node 22's experimental type-transform pipeline.
+# There is no build step and no `npm install`: the only runtime npm dependency,
+# `ws`, is vendored under `../third_party/ws/` and consumed via the `#ws`
+# subpath in `../package.json`'s `imports` map. A small ESM resolve hook
 # (`../resolver-register.mjs`) lets the type-stripper accept the tree's
-# extension-less and `.js` import specifiers (the codex-protocol bindings
-# are generator output we do not rewrite).
+# extension-less and `.js` import specifiers (the codex-protocol bindings are
+# generator output we do not rewrite).
+#
+# The npm package is different: Node refuses type stripping inside
+# `node_modules`, so npm publishes compiled ESM under `../dist/`. If this file
+# is invoked from that package shape, it delegates to `../dist/tm.mjs`.
 #
 # Requirements: Node 22.7 or newer (`--experimental-transform-types` ships
 # in 22.7, and the vendored `ws` consumes its CJS lib files via the upstream
@@ -38,6 +42,7 @@ HERE="$(cd "$(dirname "$SCRIPT")" && pwd -P)"
 ROOT="$HERE/.."
 ENTRY="$ROOT/src/main.ts"
 REGISTER="$ROOT/resolver-register.mjs"
+DIST_ENTRY="$ROOT/dist/tm.mjs"
 
 if ! command -v node >/dev/null 2>&1; then
     echo "tm: node not found on PATH. Install Node 22.7+ (https://nodejs.org/) and try again." >&2
@@ -57,6 +62,17 @@ NODE_MINOR="${NODE_REST%%.*}"
 if [[ "$NODE_MAJOR" -lt 22 ]] || { [[ "$NODE_MAJOR" -eq 22 ]] && [[ "$NODE_MINOR" -lt 7 ]]; }; then
     echo "tm: requires Node 22.7 or newer (found v$NODE_VERSION). Upgrade Node and try again." >&2
     exit 1
+fi
+
+if [[ -f "$DIST_ENTRY" ]]; then
+    case "$ROOT" in
+        *node_modules*)
+            exec node "$DIST_ENTRY" "$@"
+            ;;
+    esac
+    if [[ ! -f "$ENTRY" ]]; then
+        exec node "$DIST_ENTRY" "$@"
+    fi
 fi
 
 if [[ ! -f "$ENTRY" ]]; then

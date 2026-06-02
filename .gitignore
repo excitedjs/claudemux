@@ -15,6 +15,7 @@
 # the repo root should never have one, but a stray `npx`-from-root run leaves
 # one behind. Ignore so the next stray invocation can't accidentally commit it.
 node_modules/
+plugins/claudemux/dist/
 
 # Local Claude Code scheduling state (per-machine)
 .claude/

@@ -163,7 +163,7 @@ weekly pass.
 | Tool | Why |
 |---|---|
 | Claude Code CLI | The plugin attaches to it. |
-| Node 22.7+ | The `tm` CLI runs the orchestration core (TypeScript) through Node's experimental type-transform pipeline directly from source — no `npm install`, no build step. 22.7 is the version that introduced `--experimental-transform-types`. |
+| Node 22.7+ | The plugin launcher runs the orchestration core (TypeScript) through Node's experimental type-transform pipeline directly from source. The npm package ships compiled JavaScript for `node_modules` installs. |
 | `tmux` | Teammates live in tmux sessions. |
 | `jq` | The Stop hook parses harness JSON. |
 | `bash` | Plugin scripts use Bash features. |
@@ -186,6 +186,12 @@ ln -sf ~/.claude/plugins/cache/claudemux/claudemux/<version>/bin/tm ~/.local/bin
 
 Make sure `~/.local/bin` is on your `PATH`. Replace `<version>` with the
 installed version.
+
+For npm one-off use, run the same verbs through the published CLI package:
+
+```bash
+npx -y @excitedjs/tm <verb>
+```
 
 ## Known limitations
 

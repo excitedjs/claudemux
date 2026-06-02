@@ -372,7 +372,7 @@ export function ensureCodexIpcBridge(
   try {
     stdoutFd = openSync(codexIpcBridgeStdoutLogFile(name), 'a', 0o600)
     stderrFd = openSync(codexIpcBridgeStderrLogFile(name), 'a', 0o600)
-    const scriptPath = fileURLToPath(new URL('./ipc-bridge-process.ts', import.meta.url))
+    const scriptPath = codexIpcBridgeProcessScriptPath()
     const child = spawnChild(
       process.execPath,
       [...process.execArgv, scriptPath, name],
@@ -396,6 +396,13 @@ export function ensureCodexIpcBridge(
     if (stderrFd !== null) closeSync(stderrFd)
     if (pidFd !== null) closeSync(pidFd)
   }
+}
+
+function codexIpcBridgeProcessScriptPath(): string {
+  const moduleDir = dirname(fileURLToPath(import.meta.url))
+  const bundled = join(moduleDir, 'ipc-bridge-process.mjs')
+  if (existsSync(bundled)) return bundled
+  return fileURLToPath(new URL('./ipc-bridge-process.ts', import.meta.url))
 }
 
 function reapCodexIpcBridge(name: string): void {

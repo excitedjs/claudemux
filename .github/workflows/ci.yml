@@ -257,6 +257,10 @@ jobs:
         working-directory: plugins/claudemux
         run: pnpm run lint:dead-code
 
+      - name: Build npm package runtime
+        working-directory: plugins/claudemux
+        run: pnpm run build:npm
+
       # The codex app-server protocol bindings under `src/codex-protocol/`
       # are emitted by `codex app-server generate-ts --experimental`. They
       # are vendored as ground truth: a codex upgrade that changes the
@@ -285,17 +289,32 @@ jobs:
         working-directory: plugins/claudemux
         run: pnpm test
 
-      # Smoke-test the user-facing launcher itself: it must boot through
-      # Node's type-transform pipeline against the vendored sources without
-      # any `node_modules/ws` present. We hide node_modules during the run
-      # so a regression that quietly resolves `ws` instead of `#ws` is
-      # caught here rather than at install time on a real user's machine.
-      - name: tm launcher boots without runtime deps
+      # Smoke-test both runtime shapes:
+      #
+      # - The plugin checkout still boots from TypeScript source without
+      #   runtime npm dependencies.
+      # - The npm tarball installs under an npx-style node_modules tree and
+      #   boots from compiled JavaScript, because Node refuses type stripping
+      #   for files inside node_modules.
+      - name: tm source launcher boots without runtime deps
         working-directory: plugins/claudemux
         run: |
           mv node_modules .node_modules_hidden
-          if ! ./bin/tm --help >/dev/null; then
-            mv .node_modules_hidden node_modules
+          trap 'mv .node_modules_hidden node_modules' EXIT
+          ./bin/tm --help >/dev/null
+
+      - name: npm package boots from node_modules
+        working-directory: plugins/claudemux
+        run: |
+          rm -rf /tmp/claudemux-pack-smoke
+          mkdir -p /tmp/claudemux-pack-smoke
+          tarball="$(npm --cache /tmp/claudemux-pack-smoke/npm-cache pack --json --pack-destination /tmp/claudemux-pack-smoke | jq -r '.[0].filename')"
+          tarball_path="/tmp/claudemux-pack-smoke/$tarball"
+          tar -tf "$tarball_path" > /tmp/claudemux-pack-smoke/files.txt
+          grep -q '^package/dist/tm.mjs$' /tmp/claudemux-pack-smoke/files.txt
+          grep -q '^package/dist/ipc-bridge-process.mjs$' /tmp/claudemux-pack-smoke/files.txt
+          if grep -q '^package/src/' /tmp/claudemux-pack-smoke/files.txt; then
+            echo "npm package unexpectedly includes TypeScript sources" >&2
             exit 1
           fi
-          mv .node_modules_hidden node_modules
+          npm exec --yes --cache /tmp/claudemux-pack-smoke/npm-cache --package "$tarball_path" -- tm --help >/dev/null

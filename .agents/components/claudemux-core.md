@@ -21,8 +21,11 @@ and what contracts they hold.
 > [`bin/tm`](/plugins/claudemux/bin/tm) is a small bash launcher that
 > `exec`s `node` directly against
 > [`src/main.ts`](/plugins/claudemux/src/main.ts) under
-> `--experimental-transform-types`; there is no build step and no
-> `npm install`. The vendored `ws` runtime under
+> `--experimental-transform-types`; for source/plugin installs there is no
+> build step and no `npm install`. The npm package is the exception: it
+> publishes compiled ESM under [`dist/`](/plugins/claudemux/dist) because
+> Node refuses runtime TypeScript stripping for files under `node_modules`.
+> The vendored `ws` runtime under
 > [`third_party/ws/`](/plugins/claudemux/third_party/ws/) is the
 > only runtime dependency, reached through the `#ws` subpath in the
 > plugin's `package.json` `imports` map. The conformance harness compares
@@ -184,15 +187,22 @@ exact behavior. Process-launch shell-outs go through `spawnCapture`
 ## The launcher
 
 [`plugins/claudemux/bin/tm`](/plugins/claudemux/bin/tm) is a thin bash
-launcher that `exec`s `node --experimental-transform-types --no-warnings`
-directly against [`src/main.ts`](/plugins/claudemux/src/main.ts),
-with [`resolver-register.mjs`](/plugins/claudemux/resolver-register.mjs)
+launcher. In a source plugin checkout it `exec`s
+`node --experimental-transform-types --no-warnings` directly against
+[`src/main.ts`](/plugins/claudemux/src/main.ts), with
+[`resolver-register.mjs`](/plugins/claudemux/resolver-register.mjs)
 mounting a small ESM resolve hook so the type-stripper accepts the tree's
 extension-less and `.js` import specifiers. There is no build step and no
 `node_modules/` lookup; the one runtime npm dependency, `ws`, is vendored
 under [`third_party/ws/`](/plugins/claudemux/third_party/ws/)
 and reached through the `#ws` subpath in the plugin's `package.json`
-`imports` map. Source edits take effect on the next `tm` invocation. See
+`imports` map. Source edits take effect on the next `tm` invocation.
+
+The npm package path is compiled. `scripts/build-npm.mjs` bundles
+[`src/main.ts`](/plugins/claudemux/src/main.ts) to
+[`dist/tm.mjs`](/plugins/claudemux/dist/tm.mjs) and the Codex IPC bridge
+sidecar to [`dist/ipc-bridge-process.mjs`](/plugins/claudemux/dist/ipc-bridge-process.mjs);
+the package `bin.tm` points at `dist/tm.mjs`. See
 [zero-install-type-stripping](/.agents/decisions/zero-install-type-stripping.md)
 for the alternatives and the reasoning behind this shape.
 

@@ -5,6 +5,11 @@
 - **Supersedes:** [node-cli-committed-bundle](./node-cli-committed-bundle.md)
 - **Affects:** [`plugins/claudemux/bin/tm`](/plugins/claudemux/bin/tm), [`plugins/claudemux/src/`](/plugins/claudemux/src/), [`plugins/claudemux/third_party/`](/plugins/claudemux/third_party/), the `claudemux-core` CI job.
 
+> **Scope update (2026-06-02):** this decision remains the source/plugin
+> checkout runtime. The npm package now publishes compiled ESM under
+> [`dist/`](/plugins/claudemux/dist) because Node 22 refuses TypeScript type
+> stripping for files installed under `node_modules`.
+
 ## Context
 
 [node-cli-committed-bundle](./node-cli-committed-bundle.md) decided to commit an esbuild
@@ -33,7 +38,8 @@ Two facts shifted what [node-cli-committed-bundle](./node-cli-committed-bundle.m
 
 ## Decision
 
-`tm` runs TypeScript source directly. No build step, no `npm install`.
+`tm` runs TypeScript source directly in source/plugin checkouts. No build step,
+no `npm install`.
 
 - [`plugins/claudemux/bin/tm`](/plugins/claudemux/bin/tm) — the launcher
   execs
@@ -56,6 +62,12 @@ Two facts shifted what [node-cli-committed-bundle](./node-cli-committed-bundle.m
 - A `src/ws-types.d.ts` shim re-declares the `@types/ws` surface against
   `#ws` so `tsc --noEmit` follows imports without a `paths`-mapping
   trick. `@types/ws` stays in `devDependencies`.
+- The npm package is built by
+  [`scripts/build-npm.mjs`](/plugins/claudemux/scripts/build-npm.mjs), which
+  emits [`dist/tm.mjs`](/plugins/claudemux/dist/tm.mjs) and
+  [`dist/ipc-bridge-process.mjs`](/plugins/claudemux/dist/ipc-bridge-process.mjs).
+  The npm `bin.tm` entry points at `dist/tm.mjs`, while `bin/tm` remains the
+  source-plugin launcher.
 
 ## Why this shape
 

@@ -145,7 +145,7 @@ Claude Code 会话里 `tm` 自动在 `PATH` 上。会话外用法见
 | 工具 | 用途 |
 |---|---|
 | Claude Code CLI | 插件挂在它上面。 |
-| Node 22.7+ | `tm` 直接用 Node 的实验性 type-transform 跑 TypeScript 源码——没有 `npm install`,没有 build 步骤。22.7 是引入 `--experimental-transform-types` 的版本。 |
+| Node 22.7+ | 插件 launcher 直接用 Node 的实验性 type-transform 跑 TypeScript 源码; npm 包在 `node_modules` 安装路径下运行编译后的 JavaScript。 |
 | `tmux` | Teammate 跑在 tmux session 里。 |
 | `jq` | Stop hook 解析 harness JSON。 |
 | `bash` | 插件脚本用 Bash 特性。 |
@@ -165,6 +165,12 @@ ln -sf ~/.claude/plugins/cache/claudemux/claudemux/<version>/bin/tm ~/.local/bin
 ```
 
 确认 `~/.local/bin` 在 `PATH` 上。`<version>` 换成实际装的版本号。
+
+npm 一次性调用可以直接跑同一套 verb:
+
+```bash
+npx -y @excitedjs/tm <verb>
+```
 
 ## 已知限制
 

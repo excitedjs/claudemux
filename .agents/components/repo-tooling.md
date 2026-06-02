@@ -13,6 +13,7 @@ workflow.
 | [`/pnpm-workspace.yaml`](/pnpm-workspace.yaml) | Workspace package list: `plugins/claudemux`, `plugins/feishu-channel` |
 | [`/.changeset/config.json`](/.changeset/config.json) | Changesets config: `main` base branch, private package versioning, release-surface globs for claudemux and feishu-channel |
 | [`/plugins/claudemux/package.json`](/plugins/claudemux/package.json) | Claudemux package manifest — the `version-packages` release script (`changeset version` + plugin.json sync) |
+| [`/plugins/claudemux/scripts/build-npm.mjs`](/plugins/claudemux/scripts/build-npm.mjs) | Build the npm-only compiled ESM runtime under `dist/` before `npm pack` / `npm publish` |
 | [`/plugins/claudemux/scripts/sync-plugin-version.mjs`](/plugins/claudemux/scripts/sync-plugin-version.mjs) | Mirror `package.json.version` into `.claude-plugin/plugin.json.version` after Changesets versions packages |
 | [`/.husky/pre-commit`](/.husky/pre-commit) | Husky hook — checks the commit author email via `scripts/check-author` |
 | [`/.husky/pre-push`](/.husky/pre-push) | Husky hook — runs `pnpm changeset status --since=origin/main` before push |
@@ -30,13 +31,14 @@ by writing a fragment directly — do not use the interactive CLI:
 
 ```
 ---
-"claudemux": patch
+"@excitedjs/tm": patch
 ---
 
 <one-paragraph description>
 ```
 
-For `feishu-channel`, use package name `"claude-channel-feishu"` instead.
+For claudemux, use package name `"@excitedjs/tm"`. For `feishu-channel`, use
+package name `"claude-channel-feishu"` instead.
 Commit the fragment alongside the change. Release automation later runs
 `pnpm --dir plugins/claudemux version-packages`, which calls
 `changeset version` (walks up to find `/.changeset/`) and then mirrors the
@@ -67,7 +69,15 @@ Pure-docs commits (README, `CLAUDE.md`, KB files, any `*.md` that is not a
 **exempt**. The `.agents/` KB is not a feature-class path — KB changes never
 need a changeset.
 
-## npm publishing — OIDC trusted publishing
+## npm publishing — compiled CLI + OIDC trusted publishing
+
+`@excitedjs/tm` publishes the npm CLI as compiled ESM under
+`plugins/claudemux/dist/`; the package `bin.tm` points at `dist/tm.mjs`.
+`scripts/build-npm.mjs` builds both the main CLI and the Codex IPC bridge
+sidecar. `package.json` wires this through `prepack`, so `npm pack` and
+`npm publish` always build the tarball runtime before packaging. CI smoke-tests
+the packed tarball through `npm exec --package <tarball>` so the installed
+`node_modules` path is covered.
 
 `claudemux-release.yml` has a second job, `publish`, that ships the `tm` CLI to
 npm as `@excitedjs/tm` after a stable/beta release commit lands. It uses **OIDC

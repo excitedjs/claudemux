@@ -6,7 +6,7 @@ Depth lives in the KB (repo-root `.agents/`, not shipped to users): start at `.a
 
 ## Where things live (this plugin dir)
 
-- `bin/tm` — thin bash launcher; execs `node` against `src/main.ts` under `--experimental-transform-types` (no build step, no `node_modules`).
+- `bin/tm` — thin bash launcher; in a source plugin checkout it execs `node` against `src/main.ts` under `--experimental-transform-types` (no build step, no `node_modules`); in an npm package install it delegates to `dist/tm.mjs`.
 - `src/` — the `tm` CLI source: verbs, dispatch, help, the Claude and Codex engines, persistence, identity. → `.agents/components/tm.md`, `.agents/components/claudemux-core.md`.
 - `hooks/` — `on-busy.sh`, `on-stop.sh`, `on-session-start.sh`; wiring in `hooks/hooks.json`. These maintain the BUSY/idle turn signal `tm`'s waiting verbs block on. → `.agents/components/hooks.md`.
 - `skills/dispatcher/SKILL.md` — teammate-coordination ops manual (the verbs the dispatcher drives); `skills/optimize/SKILL.md` — periodic dispatcher self-review.
@@ -24,7 +24,7 @@ Depth lives in the KB (repo-root `.agents/`, not shipped to users): start at `.a
 
 ## Versioning
 
-A feature change to `bin/*`, `hooks/*`, `scripts/*`, `templates/*`, a `skills/*/SKILL.md`, or the `src/` CLI source needs a Changesets fragment for `claudemux`, not a `version` edit. KB and docs are exempt. → repo-root `CLAUDE.md`, `.agents/components/repo-tooling.md`.
+A feature change to `bin/*`, `hooks/*`, `scripts/*`, `templates/*`, a `skills/*/SKILL.md`, or the `src/` CLI source needs a Changesets fragment for `@excitedjs/tm`, not a `version` edit. KB and docs are exempt. → repo-root `CLAUDE.md`, `.agents/components/repo-tooling.md`.
 
 ## Update this file when
 

@@ -182,6 +182,15 @@ jobs:
             echo "go=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - uses: pnpm/action-setup@v6
+        if: steps.guard.outputs.go == 'true'
+        with:
+          version: 10.33.0
+
+      - name: Install workspace tooling
+        if: steps.guard.outputs.go == 'true'
+        run: pnpm install --frozen-lockfile
+
       - name: Upgrade npm for OIDC trusted publishing
         if: steps.guard.outputs.go == 'true'
         # Two separate npm version thresholds apply here:
