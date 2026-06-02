@@ -1,13 +1,14 @@
 {
   "name": "claudemux",
   "version": "3.0.0-beta.0",
-  "description": "Multi-repo Claude Code orchestrator. Run one dispatcher session in the parent of your repos; spawn, message, and wait on tmux teammates across them — all from one place.",
+  "description": "Multi-repo Claude Code orchestrator. Run one dispatcher session in the parent of your repos; spawn, message, and wait on Claude and Codex teammates across them — all from one place.",
   "author": {
     "name": "YourWildDad"
   },
   "keywords": [
     "claude-code",
-    "tmux",
+    "agent-sdk",
+    "stream-json",
     "orchestrator",
     "multi-repo",
     "dispatcher"

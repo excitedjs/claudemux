@@ -105,6 +105,26 @@ describe('stream-json broker end-to-end', () => {
     expect(b.ok && b.kind === 'turn' && b.turn.text).toBe('echo: second')
   })
 
+  it('an empty (tool-only) turn clears the last reply — no stale carry-over', async () => {
+    const name = uniqueName()
+    const promise = brokerMain(paramsFor(name))
+    running = { name, promise }
+    await waitReady(name)
+
+    const first = await brokerRequest(name, { op: 'send', prompt: 'real reply', timeoutMs: 5000 })
+    expect(first.ok && first.kind === 'turn' && first.turn.text).toBe('echo: real reply')
+    const afterReal = await brokerRequest(name, { op: 'last' })
+    expect(afterReal.ok && afterReal.kind === 'last' && afterReal.text).toBe('echo: real reply')
+
+    const empty = await brokerRequest(name, { op: 'send', prompt: '__EMPTY__', timeoutMs: 5000 })
+    expect(empty.ok && empty.kind === 'turn' && empty.turn.text).toBe('')
+    // `last` and `status` must reflect the empty turn, not the prior reply.
+    const afterEmpty = await brokerRequest(name, { op: 'last' })
+    expect(afterEmpty.ok && afterEmpty.kind === 'last' && afterEmpty.text).toBe('')
+    const status = await brokerRequest(name, { op: 'status' })
+    expect(status.ok && status.kind === 'status' && status.status.lastText).toBeNull()
+  })
+
   it('enables remote control and captures the session URL', async () => {
     const name = uniqueName()
     const p = { ...paramsFor(name), remoteControl: true }

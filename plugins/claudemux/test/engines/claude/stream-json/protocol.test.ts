@@ -158,6 +158,12 @@ describe('TurnAggregator', () => {
     agg.accept(parseLine(L(2)))
     expect(agg.sessionId).toBe('s-1')
   })
+
+  it('reports empty text for a tool-only / empty-result turn (no stale carry-over)', () => {
+    const agg = new TurnAggregator()
+    agg.accept(parseLine('{"type":"result","subtype":"success","is_error":false,"result":"","num_turns":1,"duration_ms":1,"total_cost_usd":0,"usage":{},"stop_reason":"end_turn","session_id":"s"}'))
+    expect(agg.outcome()!.text).toBe('')
+  })
 })
 
 describe('outbound builders', () => {
@@ -171,8 +177,12 @@ describe('outbound builders', () => {
     const m = JSON.parse(buildRemoteControlEnable('r9'))
     expect(m).toMatchObject({ type: 'control_request', request_id: 'r9', request: { subtype: 'remote_control', enabled: true } })
   })
-  it('builds a can_use_tool allow and a bare ack', () => {
-    expect(JSON.parse(buildCanUseToolAllow('r1')).response).toMatchObject({ subtype: 'success', request_id: 'r1', response: { behavior: 'allow' } })
+  it('builds a can_use_tool allow that echoes the input as updatedInput, and a bare ack', () => {
+    expect(JSON.parse(buildCanUseToolAllow('r1', { command: 'ls' })).response).toMatchObject({
+      subtype: 'success',
+      request_id: 'r1',
+      response: { behavior: 'allow', updatedInput: { command: 'ls' } },
+    })
     expect(JSON.parse(buildControlAck('r2')).response).toMatchObject({ subtype: 'success', request_id: 'r2' })
   })
 })

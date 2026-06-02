@@ -23,23 +23,32 @@ function emit(obj) {
   process.stdout.write(`${JSON.stringify(obj)}\n`)
 }
 
-emit({
-  type: 'system',
-  subtype: 'init',
-  session_id: SESSION_ID,
-  cwd: process.cwd(),
-  model: 'fake-model',
-  tools: ['Bash'],
-  mcp_servers: [],
-  permissionMode: 'bypassPermissions',
-  slash_commands: [],
-  output_style: 'default',
-  skills: [],
-  plugins: [],
-  apiKeySource: 'none',
-  claude_code_version: 'fake',
-  uuid: 'u-init',
-})
+// Real `claude --input-format stream-json` does NOT emit `init` at startup — it
+// emits it with the first turn, once a user message arrives on stdin. This
+// fixture matches that so a broker that waits for `init` before sending would
+// deadlock here too.
+let initialized = false
+function ensureInit() {
+  if (initialized) return
+  initialized = true
+  emit({
+    type: 'system',
+    subtype: 'init',
+    session_id: SESSION_ID,
+    cwd: process.cwd(),
+    model: 'fake-model',
+    tools: ['Bash'],
+    mcp_servers: [],
+    permissionMode: 'bypassPermissions',
+    slash_commands: [],
+    output_style: 'default',
+    skills: [],
+    plugins: [],
+    apiKeySource: 'none',
+    claude_code_version: 'fake',
+    uuid: 'u-init',
+  })
+}
 
 const rl = createInterface({ input: process.stdin })
 rl.on('line', (line) => {
@@ -54,10 +63,16 @@ rl.on('line', (line) => {
     return
   }
   if (msg.type === 'user') {
+    ensureInit()
     const content = msg.message?.content
     const text = typeof content === 'string' ? content : Array.isArray(content) ? content.map((b) => b?.text ?? '').join('') : ''
-    const reply = `echo: ${text}`
     emit({ type: 'system', subtype: 'status', status: { status: 'requesting' }, session_id: SESSION_ID, uuid: 'u-st' })
+    if (text === '__EMPTY__') {
+      // A tool-only / empty-result turn: no assistant text, empty result.
+      emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, duration_api_ms: 1, num_turns: 1, result: '', stop_reason: 'end_turn', total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: [], session_id: SESSION_ID, uuid: 'u-r0' })
+      return
+    }
+    const reply = `echo: ${text}`
     emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: reply }], stop_reason: 'end_turn', usage: { input_tokens: 5, output_tokens: 3 } }, parent_tool_use_id: null, session_id: SESSION_ID, uuid: 'u-a' })
     emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, duration_api_ms: 1, num_turns: 1, result: reply, stop_reason: 'end_turn', total_cost_usd: 0.001, usage: { input_tokens: 5, output_tokens: 3, cache_read_input_tokens: 2 }, modelUsage: {}, permission_denials: [], session_id: SESSION_ID, uuid: 'u-r' })
   }

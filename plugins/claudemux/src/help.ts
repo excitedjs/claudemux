@@ -210,13 +210,15 @@ Close statuses: merged, done, shelved, abandoned, blocked.
 
   status: `tm status <name> [lines=80]
 
-Diagnostic capture-pane. Use when send/wait cannot tell you the live TUI state.
+Diagnostic snapshot from the teammate's broker — session id, model, state, and
+the latest reply (no live pane in headless stream-json). Use when send/wait
+cannot tell you the live state.
 `,
 
   poll: `tm poll <name> <regex> [timeout=180]
 
-Diagnostic pane wait. Match the expected result, not text from the prompt you
-just sent.
+Diagnostic wait — block until the teammate's latest reply matches the regex.
+Match the expected result, not text from the prompt you just sent.
 `,
 
   doctor: `tm doctor

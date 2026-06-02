@@ -21,8 +21,9 @@
  *    `engines/claude/turn-jsonl.ts`.
  *
  * This module is pure — no I/O, no process, no clock — so the line parser and
- * the turn aggregator are unit-tested against recorded envelope fixtures with
- * no real `claude` binary.
+ * the turn aggregator are unit-tested against **synthetic** envelope sequences
+ * (hand-authored to the real wire shapes, not captured from a live session)
+ * with no real `claude` binary.
  */
 
 // ─── Low-level value helpers ────────────────────────────────────────────────
@@ -278,16 +279,21 @@ export function buildRemoteControlEnable(requestId: string): string {
 }
 
 /**
- * Answer a `can_use_tool` control request. The broker runs unattended, so the
- * default is `allow` — the bypass-equivalent answer for a teammate that has no
- * human to consult. Carried as a defensive path: under a non-blocking
- * permission mode the CLI never sends `can_use_tool`, but if a build does, the
- * broker must not leave the request unanswered and stall the turn.
+ * Answer a `can_use_tool` control request with `allow`. The broker runs
+ * unattended, so the answer for a teammate that has no human to consult is
+ * "allow". `updatedInput` echoes the tool's original input — the permission
+ * result shape carries the (possibly-rewritten) input the tool should run with,
+ * so the unmodified input is passed straight back rather than omitted.
+ *
+ * This is a defensive path: under `--dangerously-skip-permissions` the CLI does
+ * not gate tools, so `can_use_tool` is not normally emitted. It is wired so that
+ * if a build or mode does emit one, the broker answers it rather than leaving
+ * the turn waiting on an unanswered control request.
  */
-export function buildCanUseToolAllow(requestId: string): string {
+export function buildCanUseToolAllow(requestId: string, input: JsonObject): string {
   return JSON.stringify({
     type: 'control_response',
-    response: { subtype: 'success', request_id: requestId, response: { behavior: 'allow' } },
+    response: { subtype: 'success', request_id: requestId, response: { behavior: 'allow', updatedInput: input } },
   })
 }
 

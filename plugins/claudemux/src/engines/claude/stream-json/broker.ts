@@ -35,6 +35,7 @@ import {
   LineBuffer,
   parseLine,
   TurnAggregator,
+  type JsonObject,
   type ParsedLine,
   type TurnOutcome,
 } from './protocol'
@@ -129,6 +130,15 @@ class Broker {
       this.terminateChild()
       return 1
     }
+    // Ready once the child is spawned and the socket is bound. The child does
+    // NOT emit `init` until the first user message arrives, so readiness must
+    // not wait on it — the sid is already pinned via `--session-id`/`--resume`.
+    // `init` (which carries the model) lands when the first turn runs.
+    this.ready = true
+    this.state = 'idle'
+    // Remote Control is a control-plane request, independent of the data-plane
+    // turn loop, so enable it at startup rather than waiting for a turn.
+    if (this.params.remoteControl) this.enableRemoteControl()
     return await new Promise<number>((resolve) => {
       this.onExit = resolve
     })
@@ -180,7 +190,10 @@ class Broker {
         if (line.status === 'requesting' || line.status === 'working') this.markBusy()
         break
       case 'assistant':
-        if (line.text.length > 0) this.lastText = line.text
+        // The aggregator owns this turn's text (it prefers the result text and
+        // falls back to the last assistant snapshot). The broker must NOT set
+        // `lastText` from a mid-turn snapshot, or an empty/tool-only result
+        // would leave the previous turn's reply standing.
         if (this.agg !== null) this.agg.accept(line)
         break
       case 'result':
@@ -188,7 +201,7 @@ class Broker {
         this.onResult()
         break
       case 'control_request':
-        this.onControlRequest(line.requestId, line.subtype)
+        this.onControlRequest(line.requestId, line.subtype, line.request)
         break
       case 'control_response':
         this.onControlResponse(line.requestId, line.ok, line.response)
@@ -199,26 +212,25 @@ class Broker {
   }
 
   private onInit(sessionId: string | null, model: string | null): void {
-    if (sessionId !== null && sessionId !== this.meta.sessionId) {
-      this.meta.sessionId = sessionId
-      this.writeSidFiles(sessionId)
-    } else if (sessionId !== null) {
+    // `init` arrives with the first turn (not at startup). Confirm/refresh the
+    // session id and capture the model; readiness and RC are already handled in
+    // `run()`.
+    if (sessionId !== null) {
+      if (sessionId !== this.meta.sessionId) this.meta.sessionId = sessionId
       this.writeSidFiles(sessionId)
     }
     if (model !== null) this.meta.model = model
     writeMeta(this.meta)
-    this.ready = true
-    if (this.state === 'starting') this.state = 'idle'
-    if (this.params.remoteControl && this.rcRequestId === null) this.enableRemoteControl()
   }
 
   private onResult(): void {
     const outcome = this.agg?.outcome() ?? null
     const turn = outcome !== null ? toWireTurn(outcome) : null
-    if (turn !== null) {
-      this.lastTurn = turn
-      if (turn.text.length > 0) this.lastText = turn.text
-    }
+    if (turn !== null) this.lastTurn = turn
+    // `lastText` reflects THIS turn faithfully — empty for a tool-only or
+    // empty-result turn — so `tm last` / `tm states` / `tm status` never show a
+    // stale previous reply.
+    this.lastText = turn !== null ? turn.text : ''
     this.agg = null
     this.markIdle()
     // Resolve every waiter (the originating `send`, any `wait`, and freshly
@@ -232,11 +244,19 @@ class Broker {
     }
   }
 
-  private onControlRequest(requestId: string | null, subtype: string | null): void {
+  private onControlRequest(requestId: string | null, subtype: string | null, request: JsonObject): void {
     if (requestId === null || this.child?.stdin == null) return
     // Under --dangerously-skip-permissions the CLI does not ask, but answer
-    // defensively so an unexpected callback never stalls a turn.
-    const reply = subtype === 'can_use_tool' ? buildCanUseToolAllow(requestId) : buildControlAck(requestId)
+    // defensively so an unexpected callback never stalls a turn. A `can_use_tool`
+    // allow must echo the tool's input back as `updatedInput`.
+    let reply: string
+    if (subtype === 'can_use_tool') {
+      const rawInput = request['input']
+      const input: JsonObject = typeof rawInput === 'object' && rawInput !== null && !Array.isArray(rawInput) ? (rawInput as JsonObject) : {}
+      reply = buildCanUseToolAllow(requestId, input)
+    } else {
+      reply = buildControlAck(requestId)
+    }
     this.child.stdin.write(`${reply}\n`)
   }
 
@@ -289,7 +309,10 @@ class Broker {
     if (sid === null) return
     try {
       rmSync(busyMarkerFor(sid), { force: true })
+      // A turn with no text removes `.last` (the old on-stop hook did the same
+      // on an empty extract), so a tool-only turn does not leave stale text.
       if (this.lastText.length > 0) writeFileSync(lastFileFor(sid), this.lastText.endsWith('\n') ? this.lastText : `${this.lastText}\n`, 'utf8')
+      else rmSync(lastFileFor(sid), { force: true })
       writeFileSync(idleMarkerFor(sid), '', 'utf8')
     } catch {
       /* best-effort */

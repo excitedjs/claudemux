@@ -115,6 +115,28 @@ function deriveState(name: string): 'idle' | 'busy' | 'unknown' {
   return brokerAlive(name) ? 'idle' : 'unknown'
 }
 
+/** Compact relative age — `tm`'s `60s` / `5m` / `2h` / `3d`. */
+function fmtAge(ageSec: number): string {
+  if (ageSec < 90) return `${Math.max(0, ageSec)}s`
+  if (ageSec < 5400) return `${Math.round(ageSec / 60)}m`
+  if (ageSec < 129600) return `${Math.round(ageSec / 3600)}h`
+  return `${Math.round(ageSec / 86400)}d`
+}
+
+/** `tm states` LAST / PREVIEW cells, read from the broker-written `.last` file. */
+function lastExtras(sid: string | null, now: number): { last: string; preview: string } {
+  if (sid === null) return { last: '-', preview: '-' }
+  try {
+    const st = statSync(lastFileFor(sid))
+    if (st.size === 0) return { last: '-', preview: '-' }
+    const last = `${st.size}B/${fmtAge(now - Math.floor(st.mtimeMs / 1000))}`
+    const firstLine = (readFileSync(lastFileFor(sid), "utf8").split("\n")[0] ?? "").replace(/[\x00-\x1f]/g, "")
+    return { last, preview: firstLine.length > 0 ? Array.from(firstLine).slice(0, 50).join('') : '-' }
+  } catch {
+    return { last: '-', preview: '-' }
+  }
+}
+
 /** Render the per-turn usage line surfaced on stderr (the old `ctx:` echo). */
 function usageLine(turn: WireTurn): string {
   const parts: string[] = []
@@ -199,11 +221,14 @@ export class ClaudeEngine implements Engine {
 
   // ─── Fleet visibility ──────────────────────────────────────────────
 
-  async list(_ctx: EngineContext): Promise<readonly TeammateListing[]> {
+  async list(ctx: EngineContext): Promise<readonly TeammateListing[]> {
+    const now = Math.floor(ctx.now() / 1000)
     const out: TeammateListing[] = []
     for (const name of listLiveBrokers()) {
       const identity = readIdentity(name)
       const meta = readMeta(name)
+      const sid = readSid(name)
+      const { last, preview } = lastExtras(sid, now)
       out.push({
         name,
         engine: 'claude',
@@ -213,9 +238,11 @@ export class ClaudeEngine implements Engine {
         worktreeSlug: identity?.worktreeSlug ?? meta?.worktreeSlug ?? null,
         displayName: identity?.displayName ?? null,
         extras: {
-          sid: (readSid(name) ?? '').slice(0, 8),
+          sidShort: (sid ?? '').slice(0, 8),
           model: meta?.model ?? '',
           rc: meta?.remoteControlUrl ?? '',
+          last,
+          preview,
         },
       })
     }
