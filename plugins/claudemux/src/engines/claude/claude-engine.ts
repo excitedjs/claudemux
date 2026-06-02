@@ -1,21 +1,21 @@
 /**
- * `ClaudeEngine implements Engine`. Decision multi-engine-tui-architecture §"Engine interface"
- * makes this the layer the verb dispatcher routes to; every method is
- * present, every result is a discriminated union.
+ * `ClaudeEngine implements Engine` — the Claude Code engine, driven over the
+ * **stream-json stdio broker** (issue #49). Every teammate is a persistent
+ * `claude -p --input-format stream-json` child held by a detached per-teammate
+ * broker; `tm` reaches it over the broker's unix socket. There is no tmux
+ * session, no `send-keys`, and no `capture-pane` — turn lifecycle, reply text,
+ * token usage, cost, and stop reason all come from the structured `result`
+ * envelope instead of being scraped from a rendered pane.
  *
- * The fleet-visibility methods (`list`, `status`, `kill`) and every
- * teammate-targeted hot path are implemented here or in
- * `engines/claude/<verb>.ts`; `cli/dispatch.ts` reaches them only through
- * `verbs/<verb>.ts` and the Engine registry.
- *
- * The capabilities record below is what verbs branch on. `atomicSend`
- * is the type literal `true` (decision multi-engine-tui-architecture §"Capabilities are
- * structured, not stringly-typed") — Claude Code's `tm send` already
- * blocks for the next Stop hook fire, so the atomic-round-trip rule
- * holds on the Claude side without further work.
+ * The fleet verbs (`list`, `status`, `kill`) enumerate from the broker process
+ * registry rather than `tmux ls`; the turn signal the waiting verbs read
+ * (`<sid>` / `<sid>.busy` / `<sid>.last`) is written by the broker, not the
+ * retired hooks. Decision multi-engine-tui-architecture's engine interface is
+ * unchanged: every method is present, every result is a discriminated union.
  */
 
 import { existsSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 
 import type {
   CompactRequest,
@@ -49,30 +49,27 @@ import type {
 } from '../types'
 import type { Engine } from '../engine'
 import type { NativeEnv } from '../../env'
-import { claudeCompact } from './compact'
 import { claudeCtxLine, claudeCtxUsage } from './ctx'
 import { claudeDoctor } from './doctor'
 import { claudeLast } from './last'
 import { claudeMem } from './mem'
 import { claudeReload } from './reload'
 import { dieRepoNotFound } from './repo-fs'
-import { claudeResume } from './resume'
-import { claudeSend } from './send'
-import { claudeSpawn } from './spawn'
-import { claudeWait } from './wait'
+import { readSid } from './fs-util'
 import { ClaudeTeammateRecord } from './persistence'
+import { provisionWorktree, reapWorktree } from '../git-worktree'
+import { spawnBroker, brokerRequest } from './stream-json/client'
+import { brokerAlive, listLiveBrokers, readBrokerPid, readMeta, removeBrokerDir } from './stream-json/registry'
+import type { BrokerSpawnParams } from './stream-json/launch'
+import type { BrokerResponse, WireTurn } from './stream-json/wire'
 import {
   busyMarkerFor,
+  claudeStreamSocket,
   cwdFile,
   idleMarkerFor,
   lastFileFor,
-  readyFile,
-  sendAtFile,
   sidFile,
-  TMUX_SESSION_PREFIX,
-  tmuxSessionName,
 } from '../../persistence/paths'
-import { listingExtras } from './state'
 import { pluginJsonPath, tmWrapperPath } from '../../plugin-root'
 import type { TmResult } from '../../tm'
 import {
@@ -81,7 +78,7 @@ import {
   reserve as reserveIdentity,
 } from '../../persistence/identity-store'
 
-/** The Claude engine's capability report. */
+/** The Claude engine's capability report (stream-json transport). */
 export const CLAUDE_CAPABILITIES: EngineCapabilities = {
   atomicSend: true,
   atomicSpawnPrompt: true,
@@ -90,114 +87,64 @@ export const CLAUDE_CAPABILITIES: EngineCapabilities = {
   memory: 'claude-project-memory',
   reload: 'prompt-command',
   resume: 'transcript-id',
-  detachedTurn: 'replayable',
-  events: 'synthesized',
+  detachedTurn: 'best-effort-push',
+  events: 'push',
 } as const
 
-/** Trim trailing newlines without touching the rest of the string. */
+const NO_TEXT_SENTINEL = '(no text reply this turn — tool-only, /compact, /clear, or fresh spawn)\n'
+
 function rstrip(text: string): string {
   return text.replace(/\n+$/, '')
 }
 
-/** Read a file only if it exists and is non-empty (`tm`'s `[[ -s file ]]`). */
-function readIfNonEmpty(path: string): string | null {
-  try {
-    if (statSync(path).size === 0) return null
-    return readFileSync(path, 'utf8')
-  } catch {
-    return null
-  }
-}
-
-/** Lookup a teammate's session id, or `null` when the marker is missing. */
-function readSid(name: string): string | null {
-  const raw = readIfNonEmpty(sidFile(name))
-  return raw === null ? null : rstrip(raw)
-}
-
-/**
- * Compact representation of an idle marker's existence + mtime — enough
- * for the kill-path SessionEnd watcher to tell "the marker was just
- * touched" from "nothing happened". `null` means the file did not
- * exist; otherwise the value is `mtimeMs`. Captured once before
- * `/exit` is sent and compared on each poll tick.
- */
-type MarkerSignature = number | null
-
-function markerSignature(path: string): MarkerSignature {
-  try {
-    return statSync(path).mtimeMs
-  } catch {
-    return null
-  }
-}
-
-/**
- * Whether `current` reflects a marker touch that happened *after*
- * `baseline` was sampled. `on-stop.sh` re-touches the idle marker on
- * every Stop event — including SessionEnd — so an mtime that advances
- * past the baseline (or a marker that appears where there was none)
- * is the positive SessionEnd signal the kill path waits for.
- */
-function markerAdvanced(baseline: MarkerSignature, current: MarkerSignature): boolean {
-  if (current === null) return false
-  if (baseline === null) return true
-  return current > baseline
-}
-
-/** Lookup a teammate's recorded cwd; `null` if absent. */
+/** Lookup a teammate's recorded cwd from the broker-written `.cwd` pointer. */
 function readCwd(name: string): string | null {
-  const raw = readIfNonEmpty(cwdFile(name))
-  return raw === null ? null : rstrip(raw)
-}
-
-/**
- * Production grace budget (ms) for the graceful kill path — 15s
- * wait for SessionEnd after `/exit`, plus 5s wait for SessionEnd
- * after the Enter that confirms the dirty-worktree "Keep" prompt.
- *
- * The success signal in production is the idle marker
- * (`/tmp/claude-idle/<sid>`) being touched by `on-stop.sh` when
- * SessionEnd fires — that runs *before* the tmux pane dies, so on a
- * slow box where REPL teardown takes a few seconds the budget is
- * mostly headroom rather than a wait every kill pays. The 8s
- * predecessor was tight enough that even a fast Linux box on Opus
- * 4.7 would expire it and SIGHUP every kill; 20s leaves the slow
- * tail covered while keeping the fallback well clear of any human
- * impatience threshold.
- *
- * Override via `CLAUDEMUX_KILL_GRACE_MS` so the conformance harness
- * (fake tmux that never reports a pane gone, no real on-stop hook
- * to touch the marker) can keep tests under vitest's default 5s
- * timeout.
- */
-function killGraceMs(): number {
-  const override = process.env['CLAUDEMUX_KILL_GRACE_MS']
-  if (override !== undefined && override !== '') {
-    const parsed = Number(override)
-    if (Number.isFinite(parsed) && parsed >= 0) return parsed
-  }
-  return 20000
-}
-
-/**
- * Format a graceful-exit budget for the SIGHUP-fallback note. Renders
- * whole seconds as `Ns` (`20s`); sub-second budgets — the conformance
- * harness's `CLAUDEMUX_KILL_GRACE_MS=50` shape — render as `Nms` so
- * the message stays truthful when the override is short.
- */
-function describeKillGrace(ms: number): string {
-  if (ms >= 1000) return `${Math.round(ms / 1000)}s`
-  return `${ms}ms`
-}
-
-/** Whether the teammate's tmux session is alive. */
-async function hasTmuxSession(env: NativeEnv, sessionName: string): Promise<boolean> {
   try {
-    return (await env.runTmux(['has-session', '-t', `=${sessionName}`])).code === 0
+    const trimmed = rstrip(readFileSync(cwdFile(name), 'utf8'))
+    return trimmed.length > 0 ? trimmed : null
   } catch {
-    return false
+    return null
   }
+}
+
+/** Decide a teammate's `idle`/`busy`/`unknown` state from the broker signal. */
+function deriveState(name: string): 'idle' | 'busy' | 'unknown' {
+  const sid = readSid(name)
+  if (sid !== null && existsSync(busyMarkerFor(sid))) return 'busy'
+  if (sid !== null && existsSync(idleMarkerFor(sid))) return 'idle'
+  return brokerAlive(name) ? 'idle' : 'unknown'
+}
+
+/** Render the per-turn usage line surfaced on stderr (the old `ctx:` echo). */
+function usageLine(turn: WireTurn): string {
+  const parts: string[] = []
+  if (turn.inputTokens !== null) parts.push(`in=${turn.inputTokens}`)
+  if (turn.outputTokens !== null) parts.push(`out=${turn.outputTokens}`)
+  if (turn.cacheReadInputTokens !== null) parts.push(`cache=${turn.cacheReadInputTokens}`)
+  if (turn.totalCostUsd !== null) parts.push(`cost=$${turn.totalCostUsd.toFixed(4)}`)
+  return parts.length > 0 ? `ctx: ${parts.join(' ')}\n` : ''
+}
+
+/** Map a broker turn response into the engine's `TurnResult`. */
+function mapTurn(res: BrokerResponse): TurnResult {
+  if (res.ok && res.kind === 'turn') {
+    const turn = res.turn
+    const text = turn.text.length > 0 ? `${rstrip(turn.text)}\n` : NO_TEXT_SENTINEL
+    const tmResult: TmResult = { code: turn.isError ? 1 : 0, stdout: text, stderr: usageLine(turn) }
+    if (turn.isError) {
+      return { kind: 'failed', message: rstrip(turn.text) || 'turn ended in error', recoverable: false, tmResult }
+    }
+    return { kind: 'completed', text: turn.text, items: [], context: null, tmResult }
+  }
+  if (!res.ok && res.kind === 'timed-out') {
+    return { kind: 'timed-out', elapsedMs: res.elapsedMs ?? 0, tmResult: { code: 124, stdout: '', stderr: `tm: ${res.message}\n` } }
+  }
+  if (!res.ok && res.kind === 'busy') {
+    return { kind: 'failed', message: res.message, recoverable: false, tmResult: { code: 1, stdout: '', stderr: `tm: ${res.message}\n` } }
+  }
+  const message = !res.ok ? res.message : 'unexpected broker response'
+  const recoverable = !res.ok && res.kind === 'child-gone'
+  return { kind: 'failed', message, recoverable, tmResult: { code: 1, stdout: '', stderr: `tm: ${message}\n` } }
 }
 
 type ClaudeIdentityReservation =
@@ -208,11 +155,8 @@ type ClaudeIdentityReservation =
 
 function reserveClaudeIdentityForLaunch(args: {
   readonly name: TeammateName
-  /** Physical repo path (parent of the worktree, or the cwd itself for `--no-worktree`). */
   readonly repo: string
-  /** Runtime cwd — worktree path or repo. */
   readonly cwd: string
-  /** Worktree slug under `.claude/worktrees/`; `null` for `--no-worktree`. */
   readonly worktreeSlug: string | null
   readonly displayName: string | null
   readonly env: NativeEnv
@@ -225,24 +169,13 @@ function reserveClaudeIdentityForLaunch(args: {
       ? { kind: 'preexisting' }
       : { kind: 'already-exists', existingEngine: existing.engine }
   }
-
-  // The repo must already exist on disk; the worktree path may not (the
-  // Claude engine creates it via `claude --worktree`). Validate the
-  // repo, not the runtime cwd.
   try {
     if (!statSync(args.repo).isDirectory()) {
-      return {
-        kind: 'failed',
-        result: dieRepoNotFound(args.verb, args.name, args.repo, args.env.dispatcherDir),
-      }
+      return { kind: 'failed', result: dieRepoNotFound(args.verb, args.name, args.repo, args.env.dispatcherDir) }
     }
   } catch {
-    return {
-      kind: 'failed',
-      result: dieRepoNotFound(args.verb, args.name, args.repo, args.env.dispatcherDir),
-    }
+    return { kind: 'failed', result: dieRepoNotFound(args.verb, args.name, args.repo, args.env.dispatcherDir) }
   }
-
   const record = new ClaudeTeammateRecord({
     name: args.name,
     repo: realpathSync(args.repo),
@@ -253,65 +186,36 @@ function reserveClaudeIdentityForLaunch(args: {
   })
   const reserved = reserveIdentity(record.toJson())
   if (reserved.kind === 'reserved') return { kind: 'reserved' }
-  if (reserved.kind === 'taken') {
-    return { kind: 'already-exists', existingEngine: reserved.existing.engine }
-  }
-  return {
-    kind: 'failed',
-    result: { code: 1, stdout: '', stderr: `tm: ${reserved.message}\n` },
-  }
+  if (reserved.kind === 'taken') return { kind: 'already-exists', existingEngine: reserved.existing.engine }
+  return { kind: 'failed', result: { code: 1, stdout: '', stderr: `tm: ${reserved.message}\n` } }
 }
 
-/** Decide a teammate's `idle`/`busy`/`unknown` state from the hook markers. */
-function deriveState(name: string): 'idle' | 'busy' | 'unknown' {
-  const sid = readSid(name)
-  if (sid === null) return 'unknown'
-  if (existsSync(busyMarkerFor(sid))) return 'busy'
-  if (existsSync(idleMarkerFor(sid))) return 'idle'
-  return 'unknown'
-}
-
-/** `ClaudeEngine` — the Claude Code engine. Stateless; verbs inject `EngineContext`. */
+/** `ClaudeEngine` — the Claude Code engine over the stream-json broker. */
 export class ClaudeEngine implements Engine {
   readonly kind: EngineKind = 'claude'
   readonly capabilities = CLAUDE_CAPABILITIES
 
-  /** Runtime adapters (`tmux`, `column`, dispatcher paths) are injected per CLI invocation. */
   constructor(private readonly env: NativeEnv) {}
 
   // ─── Fleet visibility ──────────────────────────────────────────────
 
-  async list(ctx: EngineContext): Promise<readonly TeammateListing[]> {
-    let listing = ''
-    try {
-      listing = (await this.env.runTmux(['ls'])).stdout
-    } catch {
-      listing = ''
-    }
-    // Sample `now` once per `list()` call so a multi-row scan reports
-    // the same clock reading across every teammate's LAST age.
-    const now = Math.floor(ctx.now() / 1000)
+  async list(_ctx: EngineContext): Promise<readonly TeammateListing[]> {
     const out: TeammateListing[] = []
-    for (const line of listing.split('\n')) {
-      const colon = line.indexOf(':')
-      const session = colon >= 0 ? line.slice(0, colon) : line
-      if (!session.startsWith(TMUX_SESSION_PREFIX)) continue
-      const name = session.slice(TMUX_SESSION_PREFIX.length)
-      const extras = listingExtras(name, now)
+    for (const name of listLiveBrokers()) {
       const identity = readIdentity(name)
+      const meta = readMeta(name)
       out.push({
         name,
         engine: 'claude',
         state: deriveState(name),
-        repo: identity?.repo ?? readCwd(name) ?? '',
-        cwd: identity?.cwd ?? readCwd(name) ?? '',
-        worktreeSlug: identity?.worktreeSlug ?? null,
+        repo: identity?.repo ?? meta?.repo ?? '',
+        cwd: identity?.cwd ?? meta?.cwd ?? readCwd(name) ?? '',
+        worktreeSlug: identity?.worktreeSlug ?? meta?.worktreeSlug ?? null,
         displayName: identity?.displayName ?? null,
         extras: {
-          sidShort: extras.sidShort,
-          busy: extras.busy,
-          last: extras.last,
-          preview: extras.preview,
+          sid: (readSid(name) ?? '').slice(0, 8),
+          model: meta?.model ?? '',
+          rc: meta?.remoteControlUrl ?? '',
         },
       })
     }
@@ -319,72 +223,41 @@ export class ClaudeEngine implements Engine {
   }
 
   async status(req: StatusRequest, _ctx: EngineContext): Promise<TeammateStatus> {
-    const sessionName = tmuxSessionName(req.name)
-    if (!(await hasTmuxSession(this.env, sessionName))) return { kind: 'not-found' }
-
-    const linesArg = String(req.lines ?? 80)
-    let pane: string | null = null
-    try {
-      const list = await this.env.runTmux(['list-sessions', '-F', '#{session_id} #{session_name}'])
-      if (list.code !== 0) {
-        return { kind: 'failed', message: rstrip(list.stderr) || rstrip(list.stdout) || `tmux list-sessions exit ${list.code}` }
-      }
-      for (const line of list.stdout.split('\n')) {
-        const space = line.indexOf(' ')
-        if (space >= 0 && line.slice(space + 1) === sessionName) {
-          pane = line.slice(0, space)
-          break
-        }
-      }
-    } catch (err) {
-      return { kind: 'failed', message: err instanceof Error ? err.message : String(err) }
+    if (!brokerAlive(req.name)) return { kind: 'not-found' }
+    const res = await brokerRequest(req.name, { op: 'status' })
+    if (!res.ok || res.kind !== 'status') {
+      return { kind: 'failed', message: !res.ok ? res.message : 'unexpected status response' }
     }
-    if (pane === null) {
-      // `hasTmuxSession` saw the session but list-sessions did not return a
-      // matching row — surface this rather than reporting a successful
-      // status without any captured pane content.
-      return { kind: 'failed', message: `tmux session ${sessionName} present in has-session but absent from list-sessions` }
+    const s = res.status
+    const diagnostics: Record<string, string> = {
+      sessionId: s.sessionId ?? '',
+      model: s.model ?? '',
+      socket: claudeStreamSocket(req.name),
     }
-
-    let capture: string
-    try {
-      const result = await this.env.runTmux(['capture-pane', '-t', pane, '-p', '-S', `-${linesArg}`])
-      if (result.code !== 0) {
-        return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout) || `tmux capture-pane exit ${result.code}` }
-      }
-      capture = result.stdout
-    } catch (err) {
-      return { kind: 'failed', message: err instanceof Error ? err.message : String(err) }
-    }
-
+    if (s.remoteControlUrl !== null) diagnostics['remoteControl'] = s.remoteControlUrl
     return {
       kind: 'present',
       name: req.name,
       engine: 'claude',
-      state: deriveState(req.name),
-      cwd: readCwd(req.name) ?? '',
-      pane: capture,
-      diagnostics: {
-        tmuxSession: sessionName,
-        sid: readSid(req.name) ?? '',
-      },
+      state: s.state === 'busy' ? 'busy' : 'idle',
+      cwd: readCwd(req.name) ?? readMeta(req.name)?.cwd ?? '',
+      // No attachable pane in headless stream-json; surface the latest reply
+      // text as the closest observability analogue.
+      pane: s.lastText,
+      diagnostics,
     }
   }
 
   async kill(req: KillRequest, _ctx: EngineContext): Promise<KillResult> {
-    const sessionName = tmuxSessionName(req.name)
+    const identity = readIdentity(req.name)
+    const meta = readMeta(req.name)
     const sid = readSid(req.name)
+    const wasAlive = brokerAlive(req.name)
 
-    let running = false
-    try {
-      running = (await this.env.runTmux(['has-session', '-t', `=${sessionName}`])).code === 0
-    } catch {
-      running = false
-    }
-
-    let exitMode: 'graceful' | 'forced' | 'absent' = 'absent'
-    if (running) {
-      exitMode = await this.runGracefulExit(sessionName, sid)
+    if (wasAlive) {
+      await brokerRequest(req.name, { op: 'kill' })
+    } else if (readBrokerPid(req.name) === null && identity === null) {
+      return { kind: 'not-found' }
     }
 
     if (sid !== null) {
@@ -392,154 +265,25 @@ export class ClaudeEngine implements Engine {
       rmSync(lastFileFor(sid), { force: true })
       rmSync(busyMarkerFor(sid), { force: true })
     }
-    for (const file of [sidFile(req.name), sendAtFile(req.name), readyFile(req.name), cwdFile(req.name)]) {
-      rmSync(file, { force: true })
-    }
+    rmSync(sidFile(req.name), { force: true })
+    rmSync(cwdFile(req.name), { force: true })
+    removeBrokerDir(req.name)
 
-    if (exitMode === 'absent') return { kind: 'not-found' }
-    if (exitMode === 'forced') {
-      return {
-        kind: 'killed',
-        note:
-          `${req.name}: /exit did not return SessionEnd within ${describeKillGrace(killGraceMs())} — fell back to ` +
-          `tmux kill-session (SIGHUP). Any worktree Claude created is preserved; ` +
-          `remove with 'git worktree remove --force' if no longer needed.\n`,
-      }
+    let note: string | undefined
+    const repo = identity?.repo ?? meta?.repo ?? null
+    const slug = identity?.worktreeSlug ?? meta?.worktreeSlug ?? null
+    if (repo !== null && slug !== null) {
+      const reap = await reapWorktree(repo, slug)
+      if (reap.kind === 'preserved-dirty') note = `${req.name}: worktree has uncommitted changes — preserved at ${reap.path}.\n`
+      else if (reap.kind === 'preserved-unmerged') note = `${req.name}: branch ${reap.branch} has unmerged commits — worktree restored at ${reap.path}.\n`
+      else if (reap.kind === 'failed') note = `${req.name}: worktree cleanup failed: ${reap.message}\n`
     }
-    return { kind: 'killed' }
+    return note !== undefined ? { kind: 'killed', note } : { kind: 'killed' }
   }
 
-  /**
-   * Graceful Claude exit:
-   *   1. send `/exit\n` to the pane — clean worktree → auto-clean +
-   *      SessionEnd; dirty worktree → TUI prompt waits for input.
-   *   2. poll for a SessionEnd signal for up to the first budget.
-   *   3. if no signal yet, send `Enter` (picks the default "Keep
-   *      worktree" choice on the dirty prompt) and poll again for
-   *      the second budget.
-   *   4. if still no signal, fall back to `tmux kill-session` (SIGHUP).
-   *
-   * The SessionEnd signal is *either* the tmux session disappearing
-   * (process-level teardown finished) *or* the teammate's idle
-   * marker — `/tmp/claude-idle/<sid>` — being touched by `on-stop.sh`
-   * when SessionEnd fires. The hook touches the marker before the
-   * REPL exits and tmux reaps the pane, so on a slow box the marker
-   * flips seconds before `has-session` reports gone. Polling both
-   * means a clean kill returns in ~one tick instead of paying the
-   * full process-teardown wall-clock.
-   *
-   * After a marker-signaled clean exit, the pane still hosts the
-   * shell that launched Claude — without an explicit `kill-session`
-   * the tmux session lives on as a bare prompt and the teammate
-   * shows up as `unknown` in `tm ls`. The kill-session call after
-   * each graceful branch handles that teardown.
-   *
-   * Budgets default to 15s + 5s in production. The conformance
-   * harness sets `CLAUDEMUX_KILL_GRACE_MS` to a short value so the
-   * fake tmux (which never reports a pane gone after send-keys, and
-   * has no real `on-stop.sh` to touch the marker) does not blow the
-   * per-test timeout — production is unaffected.
-   *
-   * Returns `'graceful'` when SessionEnd was reached cleanly,
-   * `'forced'` when the SIGHUP fallback fired, `'absent'` when the
-   * session was gone to begin with.
-   */
-  private async runGracefulExit(
-    sessionName: string,
-    sid: string | null,
-  ): Promise<'graceful' | 'forced' | 'absent'> {
-    const totalGrace = killGraceMs()
-    const exitWait = Math.max(50, Math.floor(totalGrace * 0.75))
-    const keepWait = Math.max(50, totalGrace - exitWait)
-    const markerBaseline = sid === null ? null : markerSignature(idleMarkerFor(sid))
-    try {
-      const sendExit = await this.env.runTmux(['send-keys', '-t', sessionName, '/exit', 'Enter'])
-      if (sendExit.code !== 0) {
-        return 'absent'
-      }
-    } catch {
-      return 'absent'
-    }
-    if (await this.waitForExitSignal(sessionName, sid, markerBaseline, exitWait)) {
-      await this.tryKillTmuxSession(sessionName)
-      return 'graceful'
-    }
-    try {
-      await this.env.runTmux(['send-keys', '-t', sessionName, 'Enter'])
-    } catch {
-      // best-effort; keep going to the SIGHUP fallback.
-    }
-    if (await this.waitForExitSignal(sessionName, sid, markerBaseline, keepWait)) {
-      await this.tryKillTmuxSession(sessionName)
-      return 'graceful'
-    }
-    await this.tryKillTmuxSession(sessionName)
-    return 'forced'
-  }
+  // ─── Hot path ──────────────────────────────────────────────────────
 
-  /**
-   * Best-effort `tmux kill-session`. Wrapped in try/catch because:
-   *   - in the forced path the call is the SIGHUP fallback and a
-   *     failure means tmux already lost the session, which is the
-   *     same outcome we wanted;
-   *   - in the graceful path the marker mtime advance means the
-   *     SessionEnd hook fired, but Claude's REPL teardown plus tmux
-   *     pane reap finish later — without this call the shell that
-   *     replaces Claude in the pane keeps the tmux session alive
-   *     indefinitely as a bare prompt.
-   */
-  private async tryKillTmuxSession(sessionName: string): Promise<void> {
-    try {
-      await this.env.runTmux(['kill-session', '-t', `=${sessionName}`])
-    } catch {
-      // ignore — best-effort.
-    }
-  }
-
-  /**
-   * Poll for any of three SessionEnd signals — `tmux has-session`
-   * reports gone, the idle marker mtime advances past `baseline`, or
-   * a previously absent idle marker appears — until `budgetMs`
-   * elapses. Returns `true` on cleanup, `false` on timeout.
-   *
-   * Wall-clock is read via `process.hrtime.bigint()` so the
-   * conformance harness's `vi.useFakeTimers({ toFake: ['Date'] })`
-   * does not freeze the loop. The 200ms interval matches `pollReady`
-   * — fast enough to surface a clean exit immediately, cheap enough
-   * not to flood tmux during the dirty-prompt wait.
-   *
-   * When `sid` is `null` the teammate had no recorded session id, so
-   * the marker file does not exist and is never touched; the loop
-   * degrades cleanly to a pane-gone-only watch.
-   */
-  private async waitForExitSignal(
-    sessionName: string,
-    sid: string | null,
-    baseline: MarkerSignature,
-    budgetMs: number,
-  ): Promise<boolean> {
-    const start = process.hrtime.bigint()
-    const budgetNs = BigInt(budgetMs) * 1_000_000n
-    const markerPath = sid === null ? null : idleMarkerFor(sid)
-    while (process.hrtime.bigint() - start < budgetNs) {
-      if (markerPath !== null) {
-        const current = markerSignature(markerPath)
-        if (markerAdvanced(baseline, current)) return true
-      }
-      try {
-        const present = (await this.env.runTmux(['has-session', '-t', `=${sessionName}`])).code === 0
-        if (!present) return true
-      } catch {
-        return true
-      }
-      await new Promise((r) => setTimeout(r, 200))
-    }
-    return false
-  }
-
-  // ─── Hot path / session-shape — real bodies in engines/claude/<verb>.ts
-
-  async spawn(req: SpawnRequest, _ctx: EngineContext): Promise<SpawnResult> {
+  async spawn(req: SpawnRequest, ctx: EngineContext): Promise<SpawnResult> {
     const identity = reserveClaudeIdentityForLaunch({
       name: req.name,
       repo: req.repo,
@@ -547,86 +291,80 @@ export class ClaudeEngine implements Engine {
       worktreeSlug: req.worktreeSlug,
       displayName: req.displayName,
       env: this.env,
-      nowMs: _ctx.now(),
+      nowMs: ctx.now(),
       verb: 'spawn',
     })
-    if (identity.kind === 'already-exists') {
-      return { kind: 'already-exists', existingEngine: identity.existingEngine }
-    }
+    if (identity.kind === 'already-exists') return { kind: 'already-exists', existingEngine: identity.existingEngine }
     if (identity.kind === 'failed') {
-      return {
-        kind: 'failed',
-        message: rstrip(identity.result.stderr) || rstrip(identity.result.stdout),
-        tmResult: identity.result,
+      return { kind: 'failed', message: rstrip(identity.result.stderr) || rstrip(identity.result.stdout), tmResult: identity.result }
+    }
+
+    if (req.worktreeSlug !== null) {
+      const wtErr = await provisionWorktree(req.repo, req.worktreeSlug)
+      if (wtErr !== null) {
+        if (identity.kind === 'reserved') removeIdentity(req.name)
+        return { kind: 'failed', message: wtErr, tmResult: { code: 1, stdout: '', stderr: `tm: ${wtErr}\n` } }
       }
     }
 
-    const argv: string[] = [req.name, '--repo', req.repo, '--cwd', req.cwd]
-    if (req.worktreeSlug !== null) argv.push('--worktree-slug', req.worktreeSlug)
-    if (req.resumeCheckpoint !== null) argv.push('--resume', req.resumeCheckpoint)
-    if (req.displayName !== null) argv.push('--display-name', req.displayName)
-    if (req.remoteControl) argv.push('--remote-control')
-    if (req.prompt !== null) argv.push('--prompt', req.prompt)
-    // `--timeout` MUST reach the inner `tm send` on the --prompt sync path —
-    // CLI parses it into `SpawnRequest.timeoutMs` for a reason. Without this,
-    // `tm spawn <repo> --prompt "…" --timeout 60` silently waits 1800s and
-    // the dispatcher's bg classifier never sees the 124 it was scheduling
-    // against. The Codex engine already propagates timeoutMs into its own
-    // `send`; this keeps the two engines symmetric.
-    if (req.timeoutMs !== null) argv.push('--timeout', String(Math.round(req.timeoutMs / 1000)))
-    const result = await claudeSpawn(argv, this.env)
-    if (result.code !== 0) {
-      if (
-        identity.kind === 'reserved' &&
-        !(await hasTmuxSession(this.env, tmuxSessionName(req.name)))
-      ) {
-        removeIdentity(req.name)
-      }
-      return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), tmResult: result }
+    const params: BrokerSpawnParams = {
+      name: req.name,
+      repo: req.repo,
+      cwd: req.cwd,
+      worktreeSlug: req.worktreeSlug,
+      dispatcherDir: this.env.dispatcherDir,
+      projectsDir: this.env.projectsDir,
+      sessionId: req.resumeCheckpoint !== null ? null : randomUUID(),
+      resumeSid: req.resumeCheckpoint,
+      remoteControl: req.remoteControl,
     }
+    const brokerErr = await spawnBroker(params)
+    if (brokerErr !== null) {
+      if (identity.kind === 'reserved' && !brokerAlive(req.name)) removeIdentity(req.name)
+      removeBrokerDir(req.name)
+      return { kind: 'failed', message: brokerErr, tmResult: { code: 1, stdout: '', stderr: `tm: ${brokerErr}\n` } }
+    }
+
+    let firstTurn: TurnResult | null = null
+    if (req.prompt !== null) {
+      firstTurn = mapTurn(await brokerRequest(req.name, { op: 'send', prompt: req.prompt, timeoutMs: req.timeoutMs }))
+    }
+    const spawnStdout = `spawned ${req.name}\n`
     return {
       kind: 'spawned',
       name: req.name,
-      tmResult: result,
-      firstTurn:
-        req.prompt === null
-          ? null
-          : { kind: 'completed', text: result.stdout, items: [], context: null, tmResult: result },
+      tmResult: firstTurn?.tmResult ?? { code: 0, stdout: spawnStdout, stderr: '' },
+      firstTurn,
     }
   }
 
   async send(req: SendRequest, _ctx: EngineContext): Promise<TurnResult> {
-    const argv = [req.name, '--prompt', req.prompt]
-    if (req.timeoutMs !== null) argv.push('--timeout', String(Math.round(req.timeoutMs / 1000)))
-    if (req.paneQuiet) argv.push('--pane-quiet')
-    const result = await claudeSend(argv, this.env)
-    if (result.code !== 0) {
-      return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), recoverable: false, tmResult: result }
+    if (!brokerAlive(req.name)) {
+      const msg = `no running teammate '${req.name}'`
+      return { kind: 'failed', message: msg, recoverable: false, tmResult: { code: 1, stdout: '', stderr: `tm: ${msg}\n` } }
     }
-    return { kind: 'completed', text: result.stdout, items: [], context: null, tmResult: result }
+    return mapTurn(await brokerRequest(req.name, { op: 'send', prompt: req.prompt, timeoutMs: req.timeoutMs }))
   }
 
   async wait(req: WaitRequest, _ctx: EngineContext): Promise<TurnResult> {
-    const argv = [req.name]
-    if (req.timeoutMs !== null) argv.push('--timeout', String(Math.round(req.timeoutMs / 1000)))
-    if (req.fresh) argv.push('--fresh')
-    if (req.paneQuiet) argv.push('--pane-quiet')
-    const result = await claudeWait(argv, this.env)
-    if (result.code !== 0) {
-      return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), recoverable: true, tmResult: result }
+    if (!brokerAlive(req.name)) {
+      const msg = `no running teammate '${req.name}'`
+      return { kind: 'failed', message: msg, recoverable: true, tmResult: { code: 1, stdout: '', stderr: `tm: ${msg}\n` } }
     }
-    return { kind: 'completed', text: result.stdout, items: [], context: null, tmResult: result }
+    return mapTurn(await brokerRequest(req.name, { op: 'wait', timeoutMs: req.timeoutMs, fresh: req.fresh }))
   }
 
   async compact(req: CompactRequest, _ctx: EngineContext): Promise<CompactResult> {
-    const argv = [req.name]
-    if (req.timeoutMs !== null) argv.push('--timeout', String(Math.round(req.timeoutMs / 1000)))
-    const result = await claudeCompact(argv, this.env)
-    if (result.code === 0) return { kind: 'compacted', tmResult: result }
-    return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), tmResult: result }
+    if (!brokerAlive(req.name)) {
+      return { kind: 'failed', message: `no running teammate '${req.name}'`, tmResult: { code: 1, stdout: '', stderr: `tm: no running teammate '${req.name}'\n` } }
+    }
+    const res = await brokerRequest(req.name, { op: 'send', prompt: '/compact', timeoutMs: req.timeoutMs })
+    if (res.ok && res.kind === 'turn' && !res.turn.isError) return { kind: 'compacted', tmResult: { code: 0, stdout: 'compacted\n', stderr: '' } }
+    const message = res.ok ? 'compact did not complete' : res.message
+    return { kind: 'failed', message, tmResult: { code: 1, stdout: '', stderr: `tm: ${message}\n` } }
   }
 
-  async resume(req: ResumeRequest, _ctx: EngineContext): Promise<ResumeResult> {
+  async resume(req: ResumeRequest, ctx: EngineContext): Promise<ResumeResult> {
     const resumeRepo = req.repo ?? req.cwd ?? this.env.dispatcherDir
     const resumeCwd = req.cwd ?? resumeRepo
     const identity = reserveClaudeIdentityForLaunch({
@@ -636,37 +374,45 @@ export class ClaudeEngine implements Engine {
       worktreeSlug: req.worktreeSlug,
       displayName: req.displayName,
       env: this.env,
-      nowMs: _ctx.now(),
+      nowMs: ctx.now(),
       verb: 'resume',
     })
     if (identity.kind === 'already-exists') {
-      return {
-        kind: 'failed',
-        message: `'${req.name}' already exists as a ${identity.existingEngine} teammate`,
-      }
+      return { kind: 'failed', message: `'${req.name}' already exists as a ${identity.existingEngine} teammate` }
     }
     if (identity.kind === 'failed') {
-      return {
-        kind: 'failed',
-        message: rstrip(identity.result.stderr) || rstrip(identity.result.stdout),
-        tmResult: identity.result,
+      return { kind: 'failed', message: rstrip(identity.result.stderr) || rstrip(identity.result.stdout), tmResult: identity.result }
+    }
+    if (req.worktreeSlug !== null) {
+      const wtErr = await provisionWorktree(resumeRepo, req.worktreeSlug)
+      if (wtErr !== null) {
+        if (identity.kind === 'reserved') removeIdentity(req.name)
+        return { kind: 'failed', message: wtErr, tmResult: { code: 1, stdout: '', stderr: `tm: ${wtErr}\n` } }
       }
     }
-
-    const argv = [req.name, '--repo', resumeRepo, '--cwd', resumeCwd]
-    if (req.worktreeSlug !== null) argv.push('--worktree-slug', req.worktreeSlug)
-    if (req.checkpoint !== null) argv.push(req.checkpoint)
-    if (req.displayName !== null) argv.push('--display-name', req.displayName)
-    if (req.prompt !== null) argv.push('--prompt', req.prompt)
-    const result = await claudeResume(argv, this.env)
-    if (result.code === 0) return { kind: 'resumed', checkpoint: req.checkpoint, tmResult: result }
-    if (
-      identity.kind === 'reserved' &&
-      !(await hasTmuxSession(this.env, tmuxSessionName(req.name)))
-    ) {
-      removeIdentity(req.name)
+    const params: BrokerSpawnParams = {
+      name: req.name,
+      repo: resumeRepo,
+      cwd: resumeCwd,
+      worktreeSlug: req.worktreeSlug,
+      dispatcherDir: this.env.dispatcherDir,
+      projectsDir: this.env.projectsDir,
+      sessionId: null,
+      resumeSid: req.checkpoint,
+      remoteControl: false,
     }
-    return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), tmResult: result }
+    const brokerErr = await spawnBroker(params)
+    if (brokerErr !== null) {
+      if (identity.kind === 'reserved' && !brokerAlive(req.name)) removeIdentity(req.name)
+      removeBrokerDir(req.name)
+      return { kind: 'failed', message: brokerErr, tmResult: { code: 1, stdout: '', stderr: `tm: ${brokerErr}\n` } }
+    }
+    let tmResult: TmResult = { code: 0, stdout: `resumed ${req.name}\n`, stderr: '' }
+    if (req.prompt !== null) {
+      const turn = mapTurn(await brokerRequest(req.name, { op: 'send', prompt: req.prompt, timeoutMs: null }))
+      if (turn.tmResult !== undefined) tmResult = turn.tmResult
+    }
+    return { kind: 'resumed', checkpoint: req.checkpoint, tmResult }
   }
 
   async last(req: LastRequest, _ctx: EngineContext): Promise<TextResult> {
@@ -675,29 +421,19 @@ export class ClaudeEngine implements Engine {
   }
 
   async ctx(req: ContextRequest, _ctx: EngineContext): Promise<ContextResult> {
-    const structured = claudeCtxUsage(req.name, {
-      dispatcherDir: this.env.dispatcherDir,
-      projectsDir: this.env.projectsDir,
-    })
+    const structured = claudeCtxUsage(req.name, { dispatcherDir: this.env.dispatcherDir, projectsDir: this.env.projectsDir })
     return {
       ...structured,
-      tmResult: {
-        code: 0,
-        stdout: `${claudeCtxLine(req.name, req.windowOverride, this.env)}\n`,
-        stderr: '',
-      },
+      tmResult: { code: 0, stdout: `${claudeCtxLine(req.name, req.windowOverride, this.env)}\n`, stderr: '' },
     }
   }
 
   async mem(req: MemoryRequest, _ctx: EngineContext): Promise<TextResult> {
-    return claudeMem(req.name, {
-      dispatcherDir: this.env.dispatcherDir,
-      projectsDir: this.env.projectsDir,
-    })
+    return claudeMem(req.name, { dispatcherDir: this.env.dispatcherDir, projectsDir: this.env.projectsDir })
   }
 
   async reload(req: ReloadRequest, _ctx: EngineContext): Promise<ReloadResult> {
-    const result = await claudeReload([req.name], this.env)
+    const result = await claudeReload([req.name])
     if (result.code === 0) return { kind: 'reloaded', tmResult: result }
     return { kind: 'failed', message: rstrip(result.stderr) || rstrip(result.stdout), tmResult: result }
   }
@@ -711,16 +447,15 @@ export class ClaudeEngine implements Engine {
       fields: {
         sid: readSid(req.name) ?? '',
         cwd: readCwd(req.name) ?? '',
-        tmuxSession: tmuxSessionName(req.name),
+        brokerPid: String(readBrokerPid(req.name) ?? ''),
+        socket: claudeStreamSocket(req.name),
+        alive: String(brokerAlive(req.name)),
       },
     }
   }
 
   async doctor(_ctx: EngineContext): Promise<DoctorSection> {
-    const result = await claudeDoctor([], this.env, {
-      tmWrapper: tmWrapperPath(),
-      pluginJson: pluginJsonPath(),
-    })
+    const result = await claudeDoctor([], { tmWrapper: tmWrapperPath(), pluginJson: pluginJsonPath(), dispatcherDir: this.env.dispatcherDir })
     return {
       engine: 'claude',
       findings: [

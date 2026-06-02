@@ -1,5 +1,0 @@
-{
-  "code": 0,
-  "stdout": "killed: claudemux-conftest-2b64c5c7b40e\n",
-  "stderr": "tm kill: claudemux-conftest-2b64c5c7b40e: cleared stale identity record (engine had no live process)\n"
-}

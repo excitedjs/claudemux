@@ -71,25 +71,40 @@ for Codex teammates.
 
 ---
 
-## 4. The Claude teammate driver — tmux + hooks
+## 4. The Claude teammate driver — stream-json broker
 
-A Claude teammate is a `claude` REPL in its own tmux session, working directory
-set to the repo. `tm` drives it with `tmux new-session`, `tmux send-keys` (the
-dual-send protocol), and the [`hooks/`](/plugins/claudemux/hooks/hooks.json)
-bundle that maintains the `/tmp` BUSY/idle signal.
+> **Changed in 3.0.0-beta.0 (issue #49).** The Claude engine was driven through
+> a tmux REPL (`tmux send-keys` for input, `capture-pane` + the hook bundle for
+> output/turn state). That bridge is removed; the driver below replaces it. The
+> design and trade-offs are in the
+> [Claude stream-json transport proposal](/.agents/proposals/claude-stream-json-transport.md).
 
-It is described by
-[components/hooks.md](/.agents/components/hooks.md),
-[domains/cross-process-protocol.md](/.agents/domains/cross-process-protocol.md),
-and [decision hook-driven-busy-idle-signal](/.agents/decisions/hook-driven-busy-idle-signal.md).
-The hook scripts are Bash — Claude Code runs them — and the path-builder and
+A Claude teammate is a persistent `claude -p --output-format stream-json
+--input-format stream-json --verbose` child held by a **detached per-teammate
+broker** (`src/engines/claude/stream-json/`), launched in the teammate's cwd.
+`tm` is stateless and ephemeral, so the broker outlives any one `tm` call — the
+same detached-supervisor shape as the Codex daemon (§5). `tm` reaches the broker
+over a per-teammate unix socket (`claudeStreamSocket(name)`); the broker
+demultiplexes the child's stdout envelopes through a forward-tolerant parser,
+drives one turn at a time, and resolves a structured `TurnResult` (text, usage,
+cost, stop_reason, session_id) from the `result` envelope — no pane scraping.
+
+The broker is the **sole owner** of the `/tmp` turn signal the fleet verbs read
+(`<sid>` idle / `<sid>.busy` / `<sid>.last`), written through the same named path
+builders the hooks used to. The hook bundle is removed
+([components/hooks.md](/.agents/components/hooks.md)); the path-builder and
 cross-platform discipline of
 [decision cross-process-cross-platform-invariants](/.agents/decisions/cross-process-cross-platform-invariants.md)
-binds every `/tmp` path `tm` and the hooks share.
+still binds every `/tmp` path. Turn completion is the explicit `result`
+envelope, not an inferred marker, so the empty-`.last` race the hook driver had
+no longer applies.
 
-The turn-completion signal this driver produces is lossy-but-adequate
-([`on-stop.sh`](/plugins/claudemux/hooks/on-stop.sh)'s documented empty-`.last`
-race); fixing that race is a separate tracked item.
+The broker re-enters `tm`'s own entrypoint under the hidden `__claude-broker`
+subcommand, reconstructed from `process.execArgv` + `process.argv[1]`, so it runs
+under the identical Node runtime as `tm` (type-stripped source or `dist/tm.mjs`).
+Remote Control is enabled by the broker sending a `remote_control` control
+request and surfacing the returned claude.ai session URL; the broker tolerates
+the unsolicited turns RC and channels inject.
 
 ---
 

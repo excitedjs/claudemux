@@ -1,8 +1,18 @@
 # Component: the hook bundle
 
-Three hook scripts under [`/plugins/claudemux/hooks/`](/plugins/claudemux/hooks)
-maintain the file-based BUSY/idle signal that `tm`'s waiting verbs block on.
-Wiring is declared in [`hooks.json`](/plugins/claudemux/hooks/hooks.json).
+> **Status: removed in 3.0.0-beta.0 (issue #49).** The Claude engine no longer
+> runs in a tmux REPL, so the hook-driven turn signal it bridged has no source
+> to bridge. The **stream-json broker** now owns the `/tmp` turn signal
+> (`<sid>` idle / `<sid>.busy` / `<sid>.last`) directly — see
+> [domains/node-cli-orchestrator.md](/.agents/domains/node-cli-orchestrator.md) §4
+> and the [Claude stream-json transport proposal](/.agents/proposals/claude-stream-json-transport.md).
+> This document is retained as history of the mechanism the broker replaced; the
+> scripts (`on-busy.sh`, `on-stop.sh`, `on-session-start.sh`, `hooks.json`) are
+> deleted.
+
+Three hook scripts (historically under `plugins/claudemux/hooks/`)
+maintained the file-based BUSY/idle signal that `tm`'s waiting verbs blocked on.
+Wiring was declared in `hooks.json`.
 
 The hooks fire for **every Claude Code session on the machine** — every
 teammate *and* the dispatcher itself. Markers are keyed by `session_id`, so
@@ -13,9 +23,9 @@ markers, so its extra writes are harmless.
 
 | Script | Bound events | Job |
 |---|---|---|
-| [`on-busy.sh`](/plugins/claudemux/hooks/on-busy.sh) | `UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`, `PreCompact` | Touch `/tmp/claude-idle/<sid>.busy` — the idle→working transition |
-| [`on-stop.sh`](/plugins/claudemux/hooks/on-stop.sh) | `Stop`, `StopFailure`, `PostCompact`, `SessionEnd` | Remove `.busy`, touch the idle marker, and (Stop only) write `<sid>.last` — the working→idle transition |
-| [`on-session-start.sh`](/plugins/claudemux/hooks/on-session-start.sh) | `SessionStart` | Keep `/tmp/teammate-<repo>.sid` in sync when `/clear` or `/resume` rotates the session_id; touch `<repo>.ready` for `tm spawn`'s poll |
+| `on-busy.sh` | `UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`, `PreCompact` | Touch `/tmp/claude-idle/<sid>.busy` — the idle→working transition |
+| `on-stop.sh` | `Stop`, `StopFailure`, `PostCompact`, `SessionEnd` | Remove `.busy`, touch the idle marker, and (Stop only) write `<sid>.last` — the working→idle transition |
+| `on-session-start.sh` | `SessionStart` | Keep `/tmp/teammate-<repo>.sid` in sync when `/clear` or `/resume` rotates the session_id; touch `<repo>.ready` for `tm spawn`'s poll |
 
 The event sets for `on-busy.sh` and `on-stop.sh` are chosen to cover *every*
 transition in each direction. Why this matters: if `tm wait` only woke on

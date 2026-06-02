@@ -1,5 +1,0 @@
-{
-  "code": 1,
-  "stdout": "",
-  "stderr": "tm: tm send: missing --prompt. Usage: tm send <name> --prompt \"...\" [--pane-quiet] [--timeout N]\n"
-}

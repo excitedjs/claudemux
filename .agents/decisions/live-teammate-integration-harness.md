@@ -6,7 +6,7 @@
 
 ## Context
 
-The conformance harness ([`core/test/conformance.test.ts`](/plugins/claudemux/test/conformance.test.ts))
+The conformance harness (`core/test/conformance.test.ts`)
 pins the migrated verbs to `tm`'s behavior with a *faked* tmux and no `claude`
 process. It cannot reach the racy hot path — `spawn`, `send`, `wait`,
 `compact`, `resume` — whose correctness is the interaction of `tmux send-keys`,

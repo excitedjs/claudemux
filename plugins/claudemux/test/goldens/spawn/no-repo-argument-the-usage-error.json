@@ -1,5 +1,0 @@
-{
-  "code": 1,
-  "stdout": "",
-  "stderr": "tm: usage: tm spawn <path> [--name <id>] [--prompt \"...\"] [--no-worktree]\n"
-}

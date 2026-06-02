@@ -5,8 +5,7 @@
 
 import { dirname, join } from 'node:path'
 
-import { isDirectory } from './idle'
-import { die } from './tmux'
+import { isDirectory, die } from './fs-util'
 import type { TeammateName } from '../types'
 import type { TmResult } from '../../tm'
 

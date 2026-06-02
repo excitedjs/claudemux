@@ -1,27 +1,17 @@
 /**
- * `tm reload` — fan `/reload-plugins` out to one, many, or all
- * teammates.
+ * `tm reload` — fan `/reload-plugins` out to one, many, or all teammates.
  *
- * Fire-and-forget per teammate: each `/reload-plugins` is pushed into
- * the pane via `sendKeys` directly, without waiting for the Stop hook
- * (the user only cares that the slash command was queued; the
- * underlying claude session takes seconds to reload its plugin set,
- * and a 1-by-1 wait would serialize a 10-teammate fleet for minutes).
- *
- * `cmd_reload`'s `(failed — ...)` line and keep-iterating `rc` are
- * dead code in bash: `_send_keys` `die`s (`exit 1`) for a non-running
- * teammate rather than returning non-zero, which terminates `tm
- * reload` outright. This reproduces what `tm reload` *does* — stop at
- * the first send that exits non-zero, and propagate that exit code —
- * not the unreachable intent.
+ * Over the stream-json broker each `/reload-plugins` is one user turn: the
+ * broker submits it and the `claude` child reloads its plugin set. `--all`
+ * enumerates the live brokers from the registry.
  */
 
-import { sendKeys } from './keys'
-import { die, iterTeammates } from './tmux'
-import type { ClaudeVerbEnv } from './env'
+import { die } from './fs-util'
+import { brokerRequest } from './stream-json/client'
+import { brokerAlive, listLiveBrokers } from './stream-json/registry'
 import type { TmResult } from '../../tm'
 
-export async function claudeReload(args: readonly string[], env: ClaudeVerbEnv): Promise<TmResult> {
+export async function claudeReload(args: readonly string[]): Promise<TmResult> {
   let all = false
   const names: string[] = []
   for (const arg of args) {
@@ -33,10 +23,8 @@ export async function claudeReload(args: readonly string[], env: ClaudeVerbEnv):
 
   if (all) {
     if (names.length > 0) return die('tm reload: --all conflicts with explicit names')
-    names.push(...(await iterTeammates(env.runTmux)))
-    if (names.length === 0) {
-      return { code: 0, stdout: '(no teammate sessions to reload)\n', stderr: '' }
-    }
+    names.push(...listLiveBrokers())
+    if (names.length === 0) return { code: 0, stdout: '(no running teammates to reload)\n', stderr: '' }
   } else if (names.length === 0) {
     return die('usage: tm reload <name>... | --all')
   }
@@ -44,10 +32,9 @@ export async function claudeReload(args: readonly string[], env: ClaudeVerbEnv):
   let stdout = ''
   for (const name of names) {
     stdout += `→ ${name}: /reload-plugins\n`
-    const sent = await sendKeys(name, '/reload-plugins', env.runTmux, process.env)
-    // A non-zero `sendKeys` is the `die` that ends `tm reload`; its
-    // own stderr went to `cmd_reload`'s `>/dev/null`, so it is dropped.
-    if (sent.code !== 0) return { code: sent.code, stdout, stderr: '' }
+    if (!brokerAlive(name)) return { code: 1, stdout, stderr: `tm: no running teammate '${name}'\n` }
+    const res = await brokerRequest(name, { op: 'send', prompt: '/reload-plugins', timeoutMs: null })
+    if (!res.ok) return { code: 1, stdout, stderr: `tm: reload '${name}' failed: ${res.message}\n` }
   }
   return { code: 0, stdout, stderr: '' }
 }

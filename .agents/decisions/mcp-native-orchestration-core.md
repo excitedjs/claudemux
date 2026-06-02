@@ -2,7 +2,7 @@
 
 - **Status:** Superseded by [decision node-cli-orchestrator](/.agents/decisions/node-cli-orchestrator.md)
 - **Date:** 2026-05-22
-- **Affects:** the whole claudemux orchestrator — [`bin/tm`](/plugins/claudemux/bin/tm) (retired), the [`hooks/`](/plugins/claudemux/hooks/hooks.json) bundle (kept, behind a driver), a new resident orchestration core. Lands on the **`next`** branch, version line **`1.0.0-beta.0`** (parallel to `main`'s 0.x).
+- **Affects:** the whole claudemux orchestrator — [`bin/tm`](/plugins/claudemux/bin/tm) (retired), the `hooks/` bundle (kept, behind a driver), a new resident orchestration core. Lands on the **`next`** branch, version line **`1.0.0-beta.0`** (parallel to `main`'s 0.x).
 
 ## Context
 
@@ -87,7 +87,7 @@ with **per-agent teammate drivers**. The load-bearing rulings:
   [decision cross-process-cross-platform-invariants](/.agents/decisions/cross-process-cross-platform-invariants.md)
   binds every path in it.
 - **The Claude driver's turn-completion signal is lossy, not merely late** —
-  [`on-stop.sh`](/plugins/claudemux/hooks/on-stop.sh) carries a documented
+  `on-stop.sh` carries a documented
   open race (an empty `.last` on a thinking-then-text turn). Metrics must
   measure the Claude driver's `turn/completed` *correctness*, not only its
   latency.

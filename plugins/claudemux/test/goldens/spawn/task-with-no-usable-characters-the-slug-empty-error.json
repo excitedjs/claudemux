@@ -1,5 +1,0 @@
-{
-  "code": 1,
-  "stdout": "",
-  "stderr": "tm: tm spawn: --task was removed in the name/repo decoupling cut. Pass --name <id> to set an explicit teammate name, or omit it to auto-generate (`<path-leaf>-<rand4>`).\n"
-}

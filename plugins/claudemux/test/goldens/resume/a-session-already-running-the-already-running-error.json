@@ -1,5 +1,0 @@
-{
-  "code": 1,
-  "stdout": "",
-  "stderr": "tm: resume: no resumable session for claudemux-conftest-862cfcb40c2e — no Claude transcript under projectsDir and no Codex rollout for cwd <SCRATCH>/dispatcher/claudemux-conftest-862cfcb40c2e. To start a new session, use 'tm spawn claudemux-conftest-862cfcb40c2e [--engine codex|claude]'.\n"
-}
