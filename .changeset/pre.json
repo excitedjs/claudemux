@@ -5,5 +5,7 @@
     "@excitedjs/tm": "3.0.0-beta.0",
     "claude-channel-feishu": "0.4.2"
   },
-  "changesets": []
+  "changesets": [
+    "claude-stream-json-transport"
+  ]
 }
