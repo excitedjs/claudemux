@@ -43,7 +43,6 @@ import {
   writeBaseRecord,
 } from '../src/engines/codex/persistence'
 import { CODEX_ROLLOUT_BUSY_WINDOW_MS } from '../src/engines/codex/rollout'
-import { hasCodexHistoryForCwd, rowsFromCodexHistorySource } from '../src/engines/codex/history'
 import type { EngineContext } from '../src/engines/types'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -127,78 +126,6 @@ function writeRollout(threadId: string, lines: readonly unknown[], mtimeMs = Dat
   const mtime = new Date(mtimeMs)
   utimesSync(file, mtime, mtime)
   return file
-}
-
-function codexHistoryLines(historyCwd: string, firstPrompt: string, lastAssistant: string): readonly unknown[] {
-  return [
-    {
-      timestamp: '2026-05-24T00:00:00.000Z',
-      type: 'session_meta',
-      payload: { id: 'session', cwd: historyCwd },
-    },
-    {
-      timestamp: '2026-05-24T00:00:01.000Z',
-      type: 'event_msg',
-      payload: { type: 'user_message', message: firstPrompt },
-    },
-    {
-      timestamp: '2026-05-24T00:00:02.000Z',
-      type: 'event_msg',
-      payload: {
-        type: 'agent_message',
-        message: lastAssistant,
-        phase: 'final_answer',
-      },
-    },
-    {
-      timestamp: '2026-05-24T00:00:03.000Z',
-      type: 'event_msg',
-      payload: {
-        type: 'token_count',
-        info: {
-          last_token_usage: {
-            input_tokens: 12345,
-            output_tokens: 321,
-            total_tokens: 12666,
-          },
-          model_context_window: 200000,
-        },
-      },
-    },
-  ]
-}
-
-function codexHistoryResponseItemLines(
-  historyCwd: string,
-  firstPrompt: string,
-  lastAssistant: string,
-): readonly unknown[] {
-  return [
-    {
-      timestamp: '2026-05-24T00:00:00.000Z',
-      type: 'session_meta',
-      payload: { id: 'session', cwd: historyCwd },
-    },
-    {
-      timestamp: '2026-05-24T00:00:01.000Z',
-      type: 'response_item',
-      payload: {
-        type: 'message',
-        role: 'user',
-        content: [{ type: 'input_text', text: firstPrompt }],
-      },
-    },
-    {
-      timestamp: '2026-05-24T00:00:02.000Z',
-      type: 'response_item',
-      payload: {
-        type: 'message',
-        role: 'assistant',
-        phase: 'final_answer',
-        content: [{ type: 'output_text', text: lastAssistant }],
-      },
-    },
-  ]
 }
 
 function connectionCounts(file: string): { opens: number; closes: number } {
@@ -769,116 +696,6 @@ describe.skip('CodexEngine — core lifecycle', () => {
     await waitFor(() => connectionCounts(connectionLog).closes >= before.closes + 1)
     const after = connectionCounts(connectionLog)
     expect(after.opens).toBe(after.closes)
-  })
-
-  test('history source reads codex rollouts for the teammate cwd', () => {
-    const name = nameUnder()
-    const activeThreadId = '019e5f5f-2e57-7abc-8def-123456789abc'
-    const oldThreadId = '019e5f5f-2e57-7abc-8def-123456789abd'
-    const otherThreadId = '019e5f5f-2e57-7abc-8def-123456789abe'
-    const otherCwd = mkdtempSync('/tmp/cmxe-other-cwd-')
-    const nowMs = 1_800_000_000_000
-    writeDaemonFiles(name, activeThreadId)
-    writeRollout(
-      activeThreadId,
-      codexHistoryLines(cwd, 'Implement codex history', 'active answer'),
-      nowMs - 5_000,
-    )
-    writeRollout(
-      oldThreadId,
-      codexHistoryLines(cwd, 'Older codex thread', 'old answer'),
-      nowMs - 70_000,
-    )
-    writeRollout(
-      otherThreadId,
-      codexHistoryLines(otherCwd, 'Other repo thread', 'other answer'),
-      nowMs - 1_000,
-    )
-
-    try {
-      const rows = rowsFromCodexHistorySource({
-        idPrefix: null,
-        knownCwds: [cwd],
-        allowGlobal: false,
-        env: process.env,
-      }).map(({ row }) => row)
-
-      expect(rows.map((row) => row.id)).toEqual([activeThreadId, oldThreadId])
-      expect(rows[0]).toMatchObject({
-        engine: 'codex',
-        source: 'rollout',
-        cwd,
-        state: 'orphaned',
-        topic: 'Implement codex history',
-        lastAssistantPreview: 'active answer',
-      })
-      expect(rows[1]).toMatchObject({
-        topic: 'Older codex thread',
-        lastAssistantPreview: 'old answer',
-      })
-      expect(rows).not.toContainEqual(expect.objectContaining({ id: otherThreadId }))
-    } finally {
-      rmSync(otherCwd, { recursive: true, force: true })
-    }
-  })
-
-  test('history source filters codex rollout thread id prefixes', () => {
-    const firstThreadId = '019e5f5f-1111-7abc-8def-123456789abc'
-    const secondThreadId = '019e5f5f-2222-7abc-8def-123456789abc'
-    writeRollout(firstThreadId, codexHistoryLines(cwd, 'First match', 'first answer'))
-    writeRollout(secondThreadId, codexHistoryLines(cwd, 'Second match', 'second answer'))
-
-    const rows = rowsFromCodexHistorySource({
-      idPrefix: '019e5f5f-1111',
-      knownCwds: [cwd],
-      allowGlobal: false,
-      env: process.env,
-    }).map(({ row }) => row)
-
-    expect(rows.map((row) => row.id)).toEqual([firstThreadId])
-  })
-
-  test('history source falls back to response_item user text when event_msg user text is absent', () => {
-    const threadId = '019e5f5f-2e57-7abc-8def-123456789ac2'
-    writeRollout(
-      threadId,
-      codexHistoryResponseItemLines(cwd, 'Prompt from response item', 'assistant response item'),
-    )
-
-    const rows = rowsFromCodexHistorySource({
-      idPrefix: null,
-      knownCwds: [cwd],
-      allowGlobal: false,
-      env: process.env,
-    }).map(({ row }) => row)
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({
-      topic: 'Prompt from response item',
-      lastAssistantPreview: 'assistant response item',
-    })
-  })
-
-  test('history source returns no rows when no rollout matches the cwd', () => {
-    expect(rowsFromCodexHistorySource({
-      idPrefix: null,
-      knownCwds: [cwd],
-      allowGlobal: false,
-      env: process.env,
-    })).toEqual([])
-  })
-
-  test('history routing detects cwd from only the rollout session_meta line', () => {
-    const threadId = '019e5f5f-2e57-7abc-8def-123456789ac3'
-    const rollout = writeRollout(threadId, [
-      {
-        timestamp: '2026-05-24T00:00:00.000Z',
-        type: 'session_meta',
-        payload: { id: 'session', cwd },
-      },
-    ])
-    writeFileSync(rollout, `${readFileSync(rollout, 'utf8')}${'x'.repeat(128 * 1024)}\n`)
-
-    expect(hasCodexHistoryForCwd(cwd, process.env)).toBe(true)
   })
 
   test('doctor reaps a crashed daemon registry entry', async () => {

@@ -5,11 +5,13 @@
  * while this module owns Claude Code transcript discovery and JSONL parsing.
  */
 
-import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
   cleanHistoryPreview,
+  comparableHistoryPath,
+  historyIdMatches,
   isoHistoryTime,
   parseHistoryTimeMs,
   type HistoryRowWithSort,
@@ -25,21 +27,8 @@ function stringProp(obj: Record<string, unknown>, key: string): string | null {
   return typeof value === 'string' ? value : null
 }
 
-function comparablePath(path: string): string {
-  try {
-    return realpathSync(path)
-  } catch {
-    return path
-  }
-}
-
 function projectDirForCwd(projectsDir: string, cwd: string): string {
-  return join(projectsDir, encodeProjectDir(comparablePath(cwd)))
-}
-
-function idMatches(id: string | null, prefix: string | null): boolean {
-  if (prefix === null) return true
-  return id !== null && id.toLowerCase().startsWith(prefix.toLowerCase())
+  return join(projectsDir, encodeProjectDir(comparableHistoryPath(cwd)))
 }
 
 function promptFromClaudeEntry(entry: Record<string, unknown>): string | null {
@@ -113,7 +102,7 @@ function scanClaudeProject(cwd: string | null, projectDir: string, idPrefix: str
   const out: HistoryRowWithSort[] = []
   for (const fileName of files) {
     const id = fileName.replace(/\.jsonl$/, '')
-    if (!idMatches(id, idPrefix)) continue
+    if (!historyIdMatches(id, idPrefix)) continue
     const path = join(projectDir, fileName)
     let st: ReturnType<typeof statSync>
     try {

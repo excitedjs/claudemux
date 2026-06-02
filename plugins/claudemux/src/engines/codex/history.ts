@@ -11,13 +11,14 @@ import {
   openSync,
   readFileSync,
   readSync,
-  realpathSync,
   statSync,
 } from 'node:fs'
 import { Buffer } from 'node:buffer'
 
 import {
   cleanHistoryPreview,
+  comparableHistoryPath,
+  historyIdMatches,
   isoHistoryTime,
   parseHistoryTimeMs,
   type HistoryRowWithSort,
@@ -38,21 +39,8 @@ function stringProp(obj: Record<string, unknown>, key: string): string | null {
   return typeof value === 'string' ? value : null
 }
 
-function comparablePath(path: string): string {
-  try {
-    return realpathSync(path)
-  } catch {
-    return path
-  }
-}
-
 function cwdMatches(recorded: string, target: string): boolean {
-  return recorded === target || comparablePath(recorded) === comparablePath(target)
-}
-
-function idMatches(id: string | null, prefix: string | null): boolean {
-  if (prefix === null) return true
-  return id !== null && id.toLowerCase().startsWith(prefix.toLowerCase())
+  return recorded === target || comparableHistoryPath(recorded) === comparableHistoryPath(target)
 }
 
 function cwdFromEntry(entry: unknown): string | null {
@@ -137,8 +125,8 @@ function readCodexHeader(path: string): {
 function cwdAllowed(cwd: string | null, knownCwds: readonly string[], allowGlobal: boolean): boolean {
   if (allowGlobal) return true
   if (cwd === null) return false
-  const comparable = comparablePath(cwd)
-  return knownCwds.some((known) => comparablePath(known) === comparable)
+  const comparable = comparableHistoryPath(cwd)
+  return knownCwds.some((known) => comparableHistoryPath(known) === comparable)
 }
 
 export function rowsFromCodexHistorySource(args: {
@@ -149,7 +137,7 @@ export function rowsFromCodexHistorySource(args: {
 }): HistoryRowWithSort[] {
   const out: HistoryRowWithSort[] = []
   for (const file of listCodexRolloutFiles(args.env)) {
-    if (!idMatches(file.threadId, args.idPrefix)) continue
+    if (!historyIdMatches(file.threadId, args.idPrefix)) continue
     const st = (() => {
       try {
         return statSync(file.path)

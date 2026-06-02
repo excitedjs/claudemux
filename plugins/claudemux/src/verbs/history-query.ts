@@ -1,13 +1,12 @@
-import {
-  readFileSync,
-  realpathSync,
-} from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { basename, isAbsolute, join } from 'node:path'
 
 import type { EngineKind, TeammateListing } from '../engines/types'
 import { rowsFromClaudeHistorySource } from '../engines/claude/history'
 import { rowsFromCodexHistorySource } from '../engines/codex/history'
 import {
+  comparableHistoryPath,
+  historyIdMatches,
   isoHistoryTime,
   parseHistoryTimeMs,
   type HistoryCandidateRow,
@@ -75,14 +74,6 @@ function shellSingleQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
-function comparablePath(path: string): string {
-  try {
-    return realpathSync(path)
-  } catch {
-    return path
-  }
-}
-
 function repoLeaf(path: string | null): string | null {
   if (path === null || path.length === 0) return null
   return basename(path.replace(/\/+$/, ''))
@@ -92,8 +83,8 @@ function repoMatches(row: HistoryQueryRow, filter: string | null, resolved: stri
   if (filter === null) return true
   const candidates = [row.repo, row.cwd].filter((v): v is string => v !== null && v.length > 0)
   if (resolved !== null) {
-    const cmp = comparablePath(resolved)
-    if (candidates.some((candidate) => comparablePath(candidate) === cmp)) return true
+    const cmp = comparableHistoryPath(resolved)
+    if (candidates.some((candidate) => comparableHistoryPath(candidate) === cmp)) return true
   }
   return candidates.some((candidate) => candidate === filter || repoLeaf(candidate) === filter)
 }
@@ -104,11 +95,6 @@ function globMatches(value: string | null, pattern: string | null): boolean {
   if (!pattern.includes('*')) return value === pattern
   const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')
   return new RegExp(`^${escaped}$`).test(value)
-}
-
-function idMatches(id: string | null, prefix: string | null): boolean {
-  if (prefix === null) return true
-  return id !== null && id.toLowerCase().startsWith(prefix.toLowerCase())
 }
 
 function grepMatches(row: HistoryQueryRow, needle: string | null): boolean {
@@ -338,7 +324,7 @@ function filterRows(rows: readonly HistoryRowWithSort[], query: HistoryQuery, re
     if (query.engine !== null && materialized.engine !== query.engine) return false
     if (!repoMatches(materialized, query.repo, repoResolved)) return false
     if (!globMatches(materialized.name, query.name)) return false
-    if (!idMatches(materialized.id, query.id)) return false
+    if (!historyIdMatches(materialized.id, query.id)) return false
     if (query.state !== null && materialized.state !== query.state) return false
     if (query.closeStatus !== null && materialized.closeStatus !== query.closeStatus) return false
     if (query.sinceMs !== null && (createdAtMs === null || createdAtMs < query.sinceMs)) return false
@@ -419,7 +405,7 @@ export async function queryHistory(
 ): Promise<TmResult> {
   const repoResolved = query.repo === null
     ? null
-    : comparablePath(isAbsolute(query.repo) ? query.repo : join(env.dispatcherDir, query.repo))
+    : comparableHistoryPath(isAbsolute(query.repo) ? query.repo : join(env.dispatcherDir, query.repo))
   const baseRows = [
     ...rowsFromIndex(),
     ...rowsFromListings(listings),
@@ -475,7 +461,7 @@ export function resolveHistoryId(
       env: process.env,
     }),
   ])
-    .filter(({ row }) => idMatches(row.id, idPrefix))
+    .filter(({ row }) => historyIdMatches(row.id, idPrefix))
     .map(({ row }) => withResumeCommand(row))
   const unique = new Map<string, HistoryQueryRow>()
   for (const row of allRows) {

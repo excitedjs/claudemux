@@ -7,12 +7,12 @@
  * — that disagreement would silently bias the ambiguity decision.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 
-import { hasClaudeHistoryForCwd } from '../../../src/engines/claude/history'
+import { hasClaudeHistoryForCwd, rowsFromClaudeHistorySource } from '../../../src/engines/claude/history'
 import { encodeProjectDir } from '../../../src/persistence/paths'
 
 let projectsDir: string
@@ -92,5 +92,85 @@ describe('hasClaudeHistoryForCwd', () => {
     // A different cwd encodes to a different dir → miss.
     const other = `${cwd}-not-here`
     expect(hasClaudeHistoryForCwd(other, projectsDir)).toBe(false)
+  })
+})
+
+describe('rowsFromClaudeHistorySource', () => {
+  test('parses a real Claude transcript row for a known cwd', () => {
+    const sid = '52778285-eab4-4fd2-9bbd-000000000001'
+    const transcript = join(projectDir, `${sid}.jsonl`)
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(transcript, [
+      JSON.stringify({
+        timestamp: '2026-05-24T00:00:00.000Z',
+        type: 'user',
+        message: { role: 'user', content: 'Implement Claude history\nwith details' },
+      }),
+      JSON.stringify({
+        timestamp: '2026-05-24T00:00:02.000Z',
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Claude answer\nsecond line' }],
+        },
+      }),
+      '',
+    ].join('\n'))
+    const mtime = new Date('2026-05-24T00:00:05.000Z')
+    utimesSync(transcript, mtime, mtime)
+
+    const rows = rowsFromClaudeHistorySource({
+      projectsDir,
+      knownCwds: [cwd],
+      idPrefix: null,
+    })
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      createdAtMs: Date.parse('2026-05-24T00:00:00.000Z'),
+      lastSeenAtMs: Date.parse('2026-05-24T00:00:05.000Z'),
+      row: {
+        id: sid,
+        engine: 'claude',
+        source: 'transcript',
+        cwd,
+        repo: cwd,
+        createdAt: '2026-05-24T00:00:00.000Z',
+        createdAtSource: 'jsonl',
+        lastSeenAt: '2026-05-24T00:00:05.000Z',
+        state: 'orphaned',
+        topic: 'Implement Claude history',
+        lastAssistantPreview: 'Claude answer',
+        path: transcript,
+        sizeBytes: expect.any(Number),
+      },
+    })
+  })
+
+  test('can resolve a transcript by id prefix from the global projects dir scan', () => {
+    const sid = '52778285-eab4-4fd2-9bbd-000000000002'
+    const transcript = join(projectDir, `${sid}.jsonl`)
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(transcript, `${JSON.stringify({
+      timestamp: '2026-05-24T00:00:00.000Z',
+      type: 'user',
+      message: { role: 'user', content: 'Global lookup prompt' },
+    })}\n`)
+
+    const rows = rowsFromClaudeHistorySource({
+      projectsDir,
+      knownCwds: [],
+      idPrefix: sid.slice(0, 8),
+    }).map(({ row }) => row)
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        id: sid,
+        engine: 'claude',
+        cwd: null,
+        repo: null,
+        topic: 'Global lookup prompt',
+      }),
+    ])
   })
 })

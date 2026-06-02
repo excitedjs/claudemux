@@ -1,3 +1,5 @@
+import { realpathSync } from 'node:fs'
+
 import type { EngineKind } from '../engines/types'
 import type {
   HistoryCloseStatus,
@@ -58,4 +60,17 @@ export function parseHistoryTimeMs(value: string | null): number | null {
 
 export function isoHistoryTime(ms: number | null): string | null {
   return ms === null || !Number.isFinite(ms) ? null : new Date(ms).toISOString()
+}
+
+export function historyIdMatches(id: string | null, prefix: string | null): boolean {
+  if (prefix === null) return true
+  return id !== null && id.toLowerCase().startsWith(prefix.toLowerCase())
+}
+
+export function comparableHistoryPath(path: string): string {
+  try {
+    return realpathSync(path)
+  } catch {
+    return path
+  }
 }
