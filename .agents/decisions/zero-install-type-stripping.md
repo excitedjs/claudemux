@@ -7,7 +7,7 @@
 
 > **Scope update (2026-06-02):** this decision remains the source/plugin
 > checkout runtime. The npm package now publishes compiled ESM under
-> [`dist/`](/plugins/claudemux/dist) because Node 22 refuses TypeScript type
+> `plugins/claudemux/dist/` because Node 22 refuses TypeScript type
 > stripping for files installed under `node_modules`.
 
 ## Context
@@ -64,8 +64,8 @@ no `npm install`.
   trick. `@types/ws` stays in `devDependencies`.
 - The npm package is built by
   [`scripts/build-npm.mjs`](/plugins/claudemux/scripts/build-npm.mjs), which
-  emits [`dist/tm.mjs`](/plugins/claudemux/dist/tm.mjs) and
-  [`dist/ipc-bridge-process.mjs`](/plugins/claudemux/dist/ipc-bridge-process.mjs).
+  emits `plugins/claudemux/dist/tm.mjs` and
+  `plugins/claudemux/dist/ipc-bridge-process.mjs`.
   The npm `bin.tm` entry points at `dist/tm.mjs`, while `bin/tm` remains the
   source-plugin launcher.
 

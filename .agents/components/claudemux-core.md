@@ -23,7 +23,7 @@ and what contracts they hold.
 > [`src/main.ts`](/plugins/claudemux/src/main.ts) under
 > `--experimental-transform-types`; for source/plugin installs there is no
 > build step and no `npm install`. The npm package is the exception: it
-> publishes compiled ESM under [`dist/`](/plugins/claudemux/dist) because
+> publishes compiled ESM under `plugins/claudemux/dist/` because
 > Node refuses runtime TypeScript stripping for files under `node_modules`.
 > The vendored `ws` runtime under
 > [`third_party/ws/`](/plugins/claudemux/third_party/ws/) is the
@@ -200,8 +200,8 @@ and reached through the `#ws` subpath in the plugin's `package.json`
 
 The npm package path is compiled. `scripts/build-npm.mjs` bundles
 [`src/main.ts`](/plugins/claudemux/src/main.ts) to
-[`dist/tm.mjs`](/plugins/claudemux/dist/tm.mjs) and the Codex IPC bridge
-sidecar to [`dist/ipc-bridge-process.mjs`](/plugins/claudemux/dist/ipc-bridge-process.mjs);
+`plugins/claudemux/dist/tm.mjs` and the Codex IPC bridge
+sidecar to `plugins/claudemux/dist/ipc-bridge-process.mjs`;
 the package `bin.tm` points at `dist/tm.mjs`. See
 [zero-install-type-stripping](/.agents/decisions/zero-install-type-stripping.md)
 for the alternatives and the reasoning behind this shape.
