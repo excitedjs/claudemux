@@ -225,8 +225,9 @@ Match the expected result, not text from the prompt you just sent.
 
   doctor: `tm doctor
 
-Read-only environment check: tm path/version, dispatcher dir, tmux status,
-idle dir, and active teammates. Always exits 0; read the printed lines.
+Read-only environment check: tm path/version, dispatcher dir, the claude
+binary, and active teammates (stream-json brokers + codex daemons). Always
+exits 0; read the printed lines.
 `,
 }
 
