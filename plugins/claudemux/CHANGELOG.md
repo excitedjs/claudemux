@@ -36,7 +36,9 @@
   sessions stay off.
 
   - `tm spawn --remote-control` injects `claude --remote-control` into that one
-    teammate's launch flags; `--no-remote-control` forces it off.
+    teammate's launch flags; `--no-remote-control` keeps claudemux from
+    injecting it (it cannot override a user-global `remoteControlAtStartup`,
+    which `claude` still honors).
   - `CLAUDEMUX_REMOTE_CONTROL` (truthy: `1` / `true` / `yes` / `on`), read once
     per invocation, is the dispatcher-set default for every `tm spawn`. Set it in
     the dispatcher's `.claude/settings.json` env block.
