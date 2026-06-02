@@ -50,37 +50,44 @@ export function sidFile(name: TeammateName): string {
   return join(TEAMMATE_ROOT, `teammate-${name}.sid`)
 }
 
-/** `/tmp/teammate-<name>.ready` — touched by SessionStart; cleared before spawn. */
-export function readyFile(name: TeammateName): string {
-  return join(TEAMMATE_ROOT, `teammate-${name}.ready`)
-}
-
-/** `/tmp/teammate-<name>.send-at` — touched per send; read by the pane-quiet wait fallback. */
-export function sendAtFile(name: TeammateName): string {
-  return join(TEAMMATE_ROOT, `teammate-${name}.send-at`)
-}
-
-/** The session-name prefix every tmux teammate session carries. */
-export const TMUX_SESSION_PREFIX = 'teammate-'
-
 /**
- * Compose a teammate name into its tmux session name. Schema 2 made
- * names flat, so the prefix is the only transformation.
- *
- * Example: `flow-auth-7d3a` → `teammate-flow-auth-7d3a`.
+ * Root of the Claude stream-json broker's per-teammate runtime dirs. Each
+ * teammate's detached broker holds its `claude` stream-json child and a unix
+ * socket here, mirroring the Codex daemon's `/tmp/teammate-codex/<name>/`
+ * layout so the two non-tmux engines share one supervision shape.
  */
-export function tmuxSessionName(name: TeammateName): string {
-  return `${TMUX_SESSION_PREFIX}${name}`
+export function claudeStreamRoot(): string {
+  return join(TEAMMATE_ROOT, 'teammate-claude-stream')
 }
 
-/**
- * Recover the teammate name from a tmux session string, or `null` if
- * the session does not carry the teammate prefix. Schema 2's flat
- * names make this an exact round-trip.
- */
-export function decodeTmuxSessionName(session: string): string | null {
-  if (!session.startsWith(TMUX_SESSION_PREFIX)) return null
-  return session.slice(TMUX_SESSION_PREFIX.length)
+/** Per-teammate broker runtime dir. */
+export function claudeStreamDir(name: TeammateName): string {
+  return join(claudeStreamRoot(), name)
+}
+
+/** The broker's unix-domain control socket — `tm` clients connect here. */
+export function claudeStreamSocket(name: TeammateName): string {
+  return join(claudeStreamDir(name), 'socket')
+}
+
+/** The broker process's pid file (the supervisor, not the `claude` child). */
+export function claudeStreamPidFile(name: TeammateName): string {
+  return join(claudeStreamDir(name), 'pid')
+}
+
+/** Broker metadata: session id, model, cwd, and the remote-control URL once known. */
+export function claudeStreamMetaFile(name: TeammateName): string {
+  return join(claudeStreamDir(name), 'meta.json')
+}
+
+/** Captured broker stdout — diagnostics for a broker that failed to come up. */
+export function claudeStreamStdoutLog(name: TeammateName): string {
+  return join(claudeStreamDir(name), 'broker.stdout.log')
+}
+
+/** Captured broker stderr. */
+export function claudeStreamStderrLog(name: TeammateName): string {
+  return join(claudeStreamDir(name), 'broker.stderr.log')
 }
 
 /**
@@ -106,8 +113,6 @@ export function worktreeBranchFor(slug: string): string {
 export interface ClaudeTeammateExtension {
   readonly cwd: string
   readonly sid: string
-  readonly ready: string
-  readonly sendAt: string
 }
 
 /** Materialise the Claude engine's extension paths for one teammate name. */
@@ -115,8 +120,6 @@ export function claudeExtensionFor(name: TeammateName): ClaudeTeammateExtension 
   return {
     cwd: cwdFile(name),
     sid: sidFile(name),
-    ready: readyFile(name),
-    sendAt: sendAtFile(name),
   }
 }
 

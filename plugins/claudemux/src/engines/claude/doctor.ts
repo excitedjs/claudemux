@@ -1,25 +1,22 @@
 /**
- * `tm doctor` — a read-only environment self-check. Sections fire
- * top-down: the `tm` executable, the dispatcher dir, tmux, the idle
- * dir, the active teammate list, and the codex teammates. Soft-fails
- * throughout (every probe is guarded) and always exits 0; output is
- * meant to be eyeballed, not parsed.
+ * `tm doctor` — a read-only environment self-check. Sections fire top-down: the
+ * `tm` executable, the dispatcher dir, the `claude` binary, the stream-json
+ * brokers, and the codex teammates. Soft-fails throughout (every probe is
+ * guarded) and always exits 0; output is meant to be eyeballed, not parsed.
  *
- * The path the "tm executable" section reports is the
- * `<plugin-root>/bin/tm` launcher. The caller passes the resolved
- * paths in (`tmWrapper`, `pluginJson`) because the relative-`../..`
- * computation has to be done from a `src/*.ts` file at depth one
- * inside the plugin root — engines/claude/doctor.ts sits three
- * directories deeper, so the math does not work from here.
+ * The path the "tm executable" section reports is the `<plugin-root>/bin/tm`
+ * launcher, resolved by the caller (`tmWrapper`, `pluginJson`) because the
+ * relative-`../..` computation must be done from a file one directory inside
+ * the plugin root, not from here three directories deeper.
  */
 
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 
-import { isDirectory } from './idle'
-import { iterTeammates } from './tmux'
-import { die } from './tmux'
+import { die, isDirectory } from './fs-util'
 import { fmtLocalDateTime } from './clock'
-import { idleDir, TMUX_SESSION_PREFIX } from '../../persistence/paths'
+import { claudeBinary } from './stream-json/launch'
+import { listLiveBrokers, readBrokerPid, readMeta } from './stream-json/registry'
+import { spawnCapture } from '../../proc'
 import {
   isProcessAlive as codexProcessAlive,
   listDaemons as listCodexDaemons,
@@ -27,7 +24,6 @@ import {
   reapDaemon as reapCodexDaemon,
 } from '../codex/supervisor'
 import { removeBaseRecord as removeCodexBaseRecord } from '../codex/persistence'
-import type { ClaudeVerbEnv } from './env'
 import type { TmResult } from '../../tm'
 
 export interface DoctorPaths {
@@ -35,38 +31,25 @@ export interface DoctorPaths {
   tmWrapper: string
   /** Absolute path to `<plugin-root>/.claude-plugin/plugin.json`. */
   pluginJson: string
+  /** Resolved dispatcher dir. */
+  dispatcherDir: string
 }
 
-export async function claudeDoctor(
-  args: readonly string[],
-  env: ClaudeVerbEnv,
-  paths: DoctorPaths,
-): Promise<TmResult> {
-  if (args.length > 0) {
-    return die(`tm doctor: takes no arguments (got: ${args.join(' ')})`)
-  }
+export async function claudeDoctor(args: readonly string[], paths: DoctorPaths): Promise<TmResult> {
+  if (args.length > 0) return die(`tm doctor: takes no arguments (got: ${args.join(' ')})`)
 
-  // The kv row: a 20-character padded label, then the value — matches
-  // `cmd_doctor`'s `printf '  %-20s%s\n'`. One source of truth here
-  // keeps alignment immune to label renames.
-  const kv = (label: string, value: string): string => {
-    const padded = `${label}:`.padEnd(20, ' ')
-    return `  ${padded}${value}\n`
-  }
-
+  const kv = (label: string, value: string): string => `  ${`${label}:`.padEnd(20, ' ')}${value}\n`
   let out = ''
 
   // --- tm executable ---
-  const { tmWrapper, pluginJson } = paths
+  const { tmWrapper, pluginJson, dispatcherDir } = paths
   let version = 'unknown'
   let pluginJsonPresent = false
   try {
     if (statSync(pluginJson).isFile()) {
       pluginJsonPresent = true
       const parsed = JSON.parse(readFileSync(pluginJson, 'utf8')) as { version?: unknown }
-      if (typeof parsed.version === 'string' && parsed.version.length > 0) {
-        version = parsed.version
-      }
+      if (typeof parsed.version === 'string' && parsed.version.length > 0) version = parsed.version
     }
   } catch {
     pluginJsonPresent = false
@@ -79,90 +62,41 @@ export async function claudeDoctor(
 
   // --- dispatcher dir ---
   out += 'dispatcher dir:\n'
-  out += kv('resolved', env.dispatcherDir)
+  out += kv('resolved', dispatcherDir)
   const envSet = process.env.TM_DISPATCHER_DIR
-  if (envSet !== undefined && envSet.length > 0) {
-    out += kv('TM_DISPATCHER_DIR', `set (= ${envSet})`)
-  } else {
-    out += kv(
-      'TM_DISPATCHER_DIR',
-      'unset — falling back to $PWD (run /claudemux:setup to inoculate against cwd drift)',
-    )
-  }
+  out += kv('TM_DISPATCHER_DIR', envSet !== undefined && envSet.length > 0 ? `set (= ${envSet})` : 'unset — falling back to $PWD (run /claudemux:setup to inoculate against cwd drift)')
   const pwd = process.cwd()
   out += kv('$PWD', pwd)
-  if (env.dispatcherDir !== pwd) {
-    out += kv(
-      'status',
-      'DIVERGED — dispatcher dir != $PWD; env override is currently keeping tm correct despite the drifted PWD',
-    )
-  } else {
-    out += kv('status', 'matched')
-  }
-  if (!isDirectory(env.dispatcherDir)) {
-    out += kv('warning', `${env.dispatcherDir} does not exist as a directory`)
-  }
+  out += kv('status', dispatcherDir !== pwd ? 'DIVERGED — dispatcher dir != $PWD; env override keeps tm correct despite the drifted PWD' : 'matched')
+  if (!isDirectory(dispatcherDir)) out += kv('warning', `${dispatcherDir} does not exist as a directory`)
   out += '\n'
 
-  // --- tmux ---
-  out += 'tmux:\n'
-  let tmuxVersionOk = false
-  let tmuxVersionLine = ''
+  // --- claude binary (stream-json transport) ---
+  out += 'claude binary:\n'
+  const bin = claudeBinary(process.env)
+  out += kv('resolved', bin)
   try {
-    const versionResult = await env.runTmux(['-V'])
-    if (versionResult.code === 0) {
-      tmuxVersionOk = true
-      tmuxVersionLine = versionResult.stdout.split('\n')[0] ?? '?'
-    }
+    const v = await spawnCapture([bin, '--version'])
+    if (v.code === 0) out += kv('version', (v.stdout.split('\n')[0] ?? '?').trim())
+    else out += kv('installed', `probe exited ${v.code} — is '${bin}' a working claude install?`)
   } catch {
-    tmuxVersionOk = false
-  }
-  if (!tmuxVersionOk) {
-    out += kv('installed', 'no (tmux not on PATH — claudemux teammate workflow needs it)')
-  } else {
-    out += kv('installed', `yes (${tmuxVersionLine})`)
-    let serverRunning = false
-    try {
-      serverRunning = (await env.runTmux(['info'])).code === 0
-    } catch {
-      serverRunning = false
-    }
-    if (serverRunning) out += kv('server', 'running')
-    else out += kv('server', "not running (no sessions exist yet — that's fine pre-spawn)")
-    const insideTmux = process.env.TMUX ?? ''
-    if (insideTmux.length > 0) out += kv('in tmux', `yes (TMUX=${insideTmux})`)
-    else out += kv('in tmux', 'no — tm is being run from outside a tmux session')
+    out += kv('installed', `no ('${bin}' not on PATH — set CLAUDEMUX_CLAUDE or install Claude Code)`)
   }
   out += '\n'
 
-  // --- idle dir ---
-  out += `idle dir (${idleDir()}):\n`
-  if (isDirectory(idleDir())) {
-    let count = 0
-    try {
-      count = readdirSync(idleDir()).length
-    } catch {
-      count = 0
-    }
-    out += kv('exists', `yes (${count} file(s))`)
-  } else {
-    out += kv('exists', 'no — gets created on first tm spawn / scripts/setup.sh')
-  }
-  out += '\n'
-
-  // --- active teammates ---
-  // `cmd_doctor` projects each `tmux ls` row to its session field and
-  // prints it with a two-space indent — bare session name, not the
-  // full row.
-  out += 'active teammates:\n'
-  const sessionRows = (await iterTeammates(env.runTmux)).map(
-    (name) => `${TMUX_SESSION_PREFIX}${name}`,
-  )
-  if (sessionRows.length === 0) {
+  // --- stream-json brokers ---
+  out += 'claude teammates (stream-json):\n'
+  const brokers = listLiveBrokers()
+  if (brokers.length === 0) {
     out += "  (none — use 'tm spawn <repo>' to launch one)\n"
   } else {
-    out += kv('count', String(sessionRows.length))
-    for (const name of sessionRows) out += `  ${name}\n`
+    out += kv('count', String(brokers.length))
+    for (const name of brokers) {
+      const meta = readMeta(name)
+      const pid = readBrokerPid(name)
+      const started = meta !== null ? `, started ${fmtLocalDateTime(meta.startedAt)}` : ''
+      out += `  ${name} (pid=${pid ?? '?'}${started})\n`
+    }
   }
   out += '\n'
 
@@ -176,11 +110,7 @@ export async function claudeDoctor(
     const live: { name: string; pid: number; startedAt: number }[] = []
     for (const name of codexNames) {
       const state = readCodexState(name)
-      if (state === null) {
-        reaped.push(name)
-        await reapCodexDaemon(name)
-        removeCodexBaseRecord(name)
-      } else if (!codexProcessAlive(state.pid)) {
+      if (state === null || !codexProcessAlive(state.pid)) {
         reaped.push(name)
         await reapCodexDaemon(name)
         removeCodexBaseRecord(name)
@@ -189,9 +119,7 @@ export async function claudeDoctor(
       }
     }
     out += kv('count', String(live.length))
-    for (const t of live) {
-      out += `  ${t.name} (pid=${t.pid}, started ${fmtLocalDateTime(t.startedAt)})\n`
-    }
+    for (const t of live) out += `  ${t.name} (pid=${t.pid}, started ${fmtLocalDateTime(t.startedAt)})\n`
     if (reaped.length > 0) {
       out += kv('reaped orphans', String(reaped.length))
       for (const name of reaped) out += `  ${name}\n`

@@ -7,7 +7,7 @@
  * alphanumerics, `-`, and `_`. `/` is forbidden, as is anything that
  * looks like a path segment (`.`, `..`, leading `.`).
  *
- * The flat shape is what `tmuxSessionName` and every cross-process
+ * The flat shape is what the broker socket path and every cross-process
  * file path under `/tmp` consumes directly — no encoding pass, no
  * round-trip ambiguity.
  */
