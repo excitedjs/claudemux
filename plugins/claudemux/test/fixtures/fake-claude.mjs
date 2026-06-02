@@ -50,6 +50,18 @@ function ensureInit() {
   })
 }
 
+// Simulate an RC / channel inbound turn: emit a full turn with NO user message
+// on stdin, after a delay. Exercises the broker's spontaneous-turn path.
+const spontaneousMs = Number(process.env.FAKE_CLAUDE_SPONTANEOUS_MS || '0')
+if (spontaneousMs > 0) {
+  setTimeout(() => {
+    ensureInit()
+    emit({ type: 'system', subtype: 'status', status: { status: 'working' }, session_id: SESSION_ID, uuid: 'u-sp-st' })
+    emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'spontaneous reply' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }, parent_tool_use_id: null, session_id: SESSION_ID, uuid: 'u-sp-a' })
+    emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, duration_api_ms: 1, num_turns: 1, result: 'spontaneous reply', stop_reason: 'end_turn', total_cost_usd: 0, usage: { input_tokens: 1, output_tokens: 1 }, modelUsage: {}, permission_denials: [], session_id: SESSION_ID, uuid: 'u-sp-r' })
+  }, spontaneousMs)
+}
+
 const rl = createInterface({ input: process.stdin })
 rl.on('line', (line) => {
   let msg

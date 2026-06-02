@@ -97,8 +97,9 @@ still running; 1 failure.
 Send one turn, wait for completion, print reply text on stdout. Status and ctx
 lines go to stderr.
 
---pane-quiet waits for pane quiet instead of the Stop hook; use for TUI-only
-commands. --timeout defaults to 1800s.
+--pane-quiet is accepted for compatibility and has no effect under the
+stream-json transport — every turn resolves from the result envelope.
+--timeout defaults to 1800s.
 
 Exit codes: 0 reply printed; 124 wait expired but teammate is still running;
 1 failure. Re-collect 124 with tm wait <name> or inspect with tm status <name>.
@@ -108,9 +109,10 @@ Exit codes: 0 reply printed; 124 wait expired but teammate is still running;
 
 Wait for the next teammate completion and print reply text on stdout.
 
-Use --fresh when no tm send reset the baseline for this turn. --pane-quiet uses
-pane quiet instead of the Stop hook. If both positional timeout and --timeout
-are present, the later parsed value wins.
+Use --fresh to wait for the NEXT turn (e.g. one driven by Remote Control)
+instead of returning the last one. --pane-quiet is accepted for compatibility
+and has no effect. If both positional timeout and --timeout are present, the
+later parsed value wins.
 
 Exit codes match tm send.
 `,

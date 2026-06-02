@@ -130,8 +130,8 @@ Claude Code 会话里 `tm` 自动在 `PATH` 上。会话外用法见
 | `tm mem <name>` | cat 父 repo 的 auto-memory `MEMORY.md`(FG 名 / 分支 / 进行中项目)。Worktree teammate 跟父 repo 共享 AutoMemory——`tm mem` 走 `identity.repo`,不是运行时 cwd。文件不存在 → stderr 一行提示 + exit 0 + 空 stdout。 |
 | `tm reload <name>… \| --all` | 给 teammate 派 `/reload-plugins`,插件更新后用。 |
 
-诊断用(上面 verb 都不合适时再用):`tm status <name>` 抓实时 pane,
-`tm poll <name> <regex>` 等中间状态。
+诊断用(上面 verb 都不合适时再用):`tm status <name>` 看 broker 快照
+(session id / model / state / 最近回复),`tm poll <name> <regex>` 等中间状态。
 
 行为契约和磁盘状态见
 [`plugins/claudemux/skills/dispatcher/SKILL.md`](plugins/claudemux/skills/dispatcher/SKILL.md)。
@@ -150,7 +150,7 @@ Claude Code 会话里 `tm` 自动在 `PATH` 上。会话外用法见
 | Node 22.7+ | 插件 launcher 直接用 Node 的实验性 type-transform 跑编排核心(含每个 teammate 的 stream-json broker)的 TypeScript 源码;npm 包在 `node_modules` 安装路径下运行编译后的 JavaScript。 |
 | `jq` | `/claudemux:setup` 脚本用它改 `settings.json`。 |
 | `bash` | 插件脚本用 Bash 特性。 |
-| macOS 或 Linux | 脚本用 BSD `stat`,Windows 不支持。 |
+| macOS 或 Linux | 安装脚本和 IPC 假设 POSIX;Windows 移植见 issue #48。 |
 
 ## 配置
 
@@ -200,8 +200,10 @@ npx -y @excitedjs/tm <verb>
 - **只支持单 dispatcher 根**。相对路径的 `tm spawn <path>` 按
   `TM_DISPATCHER_DIR`(或 `$PWD`)解,sibling repo 必须共享一个父目录;
   绝对路径绕过这条限制。
-- **只 macOS / Linux**。脚本用 BSD `stat`,GNU Linux 需要
-  `-c %Y`——PR welcome。
+- **跨平台进行中(issue #48)**。teammate 传输现在是 Node stream-json
+  broker——没有 tmux、没有 `capture-pane`。Windows 移植剩下的是 broker(和
+  Codex daemon)做 `tm`↔运行时 IPC 用的 unix socket、`/tmp` 路径假设,以及
+  表格渲染里的 `column` / `grep` shell-out。今天支持 macOS 和 Linux。
 - **Cron 只在交互式 TUI REPL 里 fire**。dispatcher 算;`tm` 拉起的 teammate
   现在跑 headless(`claude -p`),所以和 Agent Teams subagent 一样——调用
   `CronCreate` 会返回成功但永不触发。cron 活从 dispatcher 排。

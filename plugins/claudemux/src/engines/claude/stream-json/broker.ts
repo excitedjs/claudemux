@@ -187,17 +187,22 @@ class Broker {
         this.onInit(line.sessionId, line.model)
         break
       case 'status':
-        if (line.status === 'requesting' || line.status === 'working') this.markBusy()
+        if (line.status === 'requesting' || line.status === 'working') {
+          this.ensureTurn()
+          this.markBusy()
+        }
         break
       case 'assistant':
         // The aggregator owns this turn's text (it prefers the result text and
         // falls back to the last assistant snapshot). The broker must NOT set
         // `lastText` from a mid-turn snapshot, or an empty/tool-only result
         // would leave the previous turn's reply standing.
-        if (this.agg !== null) this.agg.accept(line)
+        this.ensureTurn()
+        this.agg!.accept(line)
         break
       case 'result':
-        if (this.agg !== null) this.agg.accept(line)
+        this.ensureTurn()
+        this.agg!.accept(line)
         this.onResult()
         break
       case 'control_request':
@@ -209,6 +214,18 @@ class Broker {
       default:
         break
     }
+  }
+
+  /**
+   * Ensure an aggregator exists for the turn now in flight. A turn the broker
+   * did NOT start — driven by Remote Control or a channel inbound message, with
+   * no `tm send` — produces the same `status` → `assistant` → `result` stream,
+   * so it is aggregated identically. Without this, a spontaneous `result` would
+   * find `agg === null`, drop the turn, leave `lastTurn` / `.last` stale, and
+   * hand a waiting `tm wait --fresh` the previous turn instead of this one.
+   */
+  private ensureTurn(): void {
+    if (this.agg === null) this.agg = new TurnAggregator()
   }
 
   private onInit(sessionId: string | null, model: string | null): void {

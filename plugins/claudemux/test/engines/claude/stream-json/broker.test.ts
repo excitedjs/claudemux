@@ -125,6 +125,29 @@ describe('stream-json broker end-to-end', () => {
     expect(status.ok && status.kind === 'status' && status.status.lastText).toBeNull()
   })
 
+  it('captures a spontaneous (RC/channel-driven) turn with no tm send — wait --fresh and last reflect it', async () => {
+    const name = uniqueName()
+    process.env['FAKE_CLAUDE_SPONTANEOUS_MS'] = '500'
+    let promise: Promise<number>
+    try {
+      promise = brokerMain(paramsFor(name))
+      running = { name, promise }
+      await waitReady(name)
+      // No `tm send`. A `wait --fresh` attached now must resolve with the
+      // spontaneous turn the fixture emits at ~500ms — not a stale turn and not
+      // child-gone.
+      const wait = await brokerRequest(name, { op: 'wait', timeoutMs: 5000, fresh: true })
+      expect(wait.ok && wait.kind === 'turn' && wait.turn.text).toBe('spontaneous reply')
+      // The turn signal the fleet verbs read reflects it too.
+      const last = await brokerRequest(name, { op: 'last' })
+      expect(last.ok && last.kind === 'last' && last.text).toBe('spontaneous reply')
+      const status = await brokerRequest(name, { op: 'status' })
+      expect(status.ok && status.kind === 'status' && status.status.state).toBe('idle')
+    } finally {
+      delete process.env['FAKE_CLAUDE_SPONTANEOUS_MS']
+    }
+  })
+
   it('enables remote control and captures the session URL', async () => {
     const name = uniqueName()
     const p = { ...paramsFor(name), remoteControl: true }

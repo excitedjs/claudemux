@@ -224,8 +224,11 @@ npx -y @excitedjs/tm <verb>
 - **Single dispatcher root.** A relative `tm spawn <path>` resolves
   against `TM_DISPATCHER_DIR` (or `$PWD`), so sibling repos must share
   one parent. Absolute paths bypass that limit.
-- **macOS / Linux only.** Scripts use BSD `stat`; GNU Linux needs
-  `-c %Y` — PRs welcome.
+- **Cross-platform is in progress (issue #48).** The teammate transport is
+  now the Node stream-json broker — no tmux, no `capture-pane`. What remains for
+  a Windows port is the unix-domain socket the broker (and the Codex daemon) use
+  for `tm`↔runtime IPC, the `/tmp` path assumptions, and the `column` / `grep`
+  shell-outs in table rendering. macOS and Linux are supported today.
 - **Cron only fires inside an interactive TUI REPL.** The dispatcher session
   qualifies; `tm`-spawned teammates now run headless (`claude -p`), so — like
   Agent Teams subagents — they accept the `CronCreate` call but silently never
