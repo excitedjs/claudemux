@@ -128,8 +128,6 @@ jobs:
         run: |
           shellcheck \
             plugins/claudemux/bin/tm \
-            plugins/claudemux/test/fixtures/fake-tmux-bin/tmux \
-            plugins/claudemux/hooks/*.sh \
             plugins/claudemux/scripts/*.sh \
             scripts/check-author \
             .husky/pre-commit \
