@@ -2,13 +2,15 @@
  * ClaudeTeammateRecord.
  *
  * The base `/tmp/teammate-<name>.json` is owned by
- * `persistence/identity-store.ts`; the Claude extension path builders and
- * tmux session-name encoding live in `persistence/paths.ts`.
+ * `persistence/identity-store.ts`; the Claude extension path builders live in
+ * `persistence/paths.ts`. The teammate's live runtime is the stream-json
+ * broker dir, so kill-time cleanup enumerates the sid/cwd pointers plus that
+ * broker directory.
  */
 
 import { TeammateRecord } from '../teammate-record'
 import type { EngineKind, TeammateName } from '../types'
-import { claudeExtensionFor, tmuxSessionName, type ClaudeTeammateExtension } from '../../persistence/paths'
+import { claudeExtensionFor, claudeStreamDir, type ClaudeTeammateExtension } from '../../persistence/paths'
 
 export class ClaudeTeammateRecord extends TeammateRecord {
   readonly engine: EngineKind = 'claude'
@@ -24,11 +26,6 @@ export class ClaudeTeammateRecord extends TeammateRecord {
     super(args)
   }
 
-  /** The tmux session name this teammate is launched as. */
-  tmuxSession(): string {
-    return tmuxSessionName(this.name)
-  }
-
   /** The Claude-engine extension paths for this teammate. */
   extension(): ClaudeTeammateExtension {
     return claudeExtensionFor(this.name)
@@ -36,6 +33,6 @@ export class ClaudeTeammateRecord extends TeammateRecord {
 
   override engineExtensionFiles(): readonly string[] {
     const ext = this.extension()
-    return [ext.cwd, ext.sid, ext.ready, ext.sendAt]
+    return [ext.cwd, ext.sid, claudeStreamDir(this.name)]
   }
 }

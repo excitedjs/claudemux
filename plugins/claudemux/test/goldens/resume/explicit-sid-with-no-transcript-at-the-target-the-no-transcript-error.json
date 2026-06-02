@@ -1,5 +1,0 @@
-{
-  "code": 1,
-  "stdout": "",
-  "stderr": "tm: no transcript at <HOME>/.claude/projects/<SCRATCH-ENC>-dispatcher-claudemux-conftest-d603bb6cd805/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl — wrong name/worktree for this sid, or sid does not exist. Check 'ls <HOME>/.claude/projects/<SCRATCH-ENC>-dispatcher-claudemux-conftest-d603bb6cd805/'.\n"
-}

@@ -1,5 +1,0 @@
-{
-  "code": 1,
-  "stdout": "",
-  "stderr": "tm: usage: tm kill <name> [--status <s>] [--note <text>]\n"
-}

@@ -14,7 +14,7 @@
 import { readFileSync, statSync } from 'node:fs'
 
 import { lastFileFor, sidFile } from '../../persistence/paths'
-import { readSid } from './state'
+import { readSid } from './fs-util'
 import type { TeammateName, TextResult } from '../types'
 
 /** Read a file only if it exists and is non-empty (`tm`'s `[[ -s file ]]`). */

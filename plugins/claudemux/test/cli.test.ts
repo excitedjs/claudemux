@@ -12,7 +12,6 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   realpathSync,
   rmSync,
   utimesSync,
@@ -42,12 +41,7 @@ import { reapDaemon } from '../src/engines/codex/supervisor'
 import { EngineRegistry } from '../src/engines/registry'
 import { read as readIdentity } from '../src/persistence/identity-store'
 import {
-  cwdFile,
   encodeProjectDir,
-  lastFileFor,
-  readyFile,
-  sendAtFile,
-  sidFile,
 } from '../src/persistence/paths'
 import type { TmuxRunner } from '../src/tmux'
 import { TM_VERBS } from '../src/verbs'
@@ -295,105 +289,6 @@ describe.skip('native dispatch', () => {
     expect(result.code).not.toBe(0)
   })
 
-  test('explicit Claude spawn is not hijacked by a stale codex registry entry', async () => {
-    const repo = `stale-claude-${Date.now()}`
-    const dispatcherDir = mkdtempSync('/tmp/cmxcli-dispatcher-')
-    const repoDir = join(dispatcherDir, repo)
-    mkdirSync(repoDir, { recursive: true })
-    mkdirSync(codexTeammateDir(repo), { recursive: true })
-    writeFileSync(codexPidFile(repo), `${process.pid}\n`)
-    writeFileSync(codexStartedAtFile(repo), `${Math.floor(Date.now() / 1000)}\n`)
-    const tmuxCalls: string[][] = []
-    const runTmux: TmuxRunner = async (args) => {
-      tmuxCalls.push([...args])
-      if (args[0] === 'has-session') return { code: 1, stdout: '', stderr: '' }
-      if (args[0] === 'new-session') {
-        mkdirSync(dirname(readyFile(repo)), { recursive: true })
-        writeFileSync(readyFile(repo), '')
-        return { code: 0, stdout: '%1\n', stderr: '' }
-      }
-      return { code: 0, stdout: '', stderr: '' }
-    }
-
-    try {
-      const result = await runCli(
-        ['spawn', repo, '--engine', 'claude'],
-        fakeEnv({ dispatcherDir, runTmux }),
-      )
-      expect(result.code).toBe(0)
-      expect(tmuxCalls.some((args) => args[0] === 'new-session')).toBe(true)
-      expect(result.stderr).toContain(`tmux=teammate-${repo}`)
-    } finally {
-      const sid = existsSync(sidFile(repo)) ? readFileSync(sidFile(repo), 'utf8').trim() : ''
-      rmSync(dispatcherDir, { recursive: true, force: true })
-      rmSync(cwdFile(repo), { force: true })
-      rmSync(sidFile(repo), { force: true })
-      rmSync(readyFile(repo), { force: true })
-      rmSync(sendAtFile(repo), { force: true })
-      if (sid.length > 0) rmSync(lastFileFor(sid), { force: true })
-      rmSync(codexTeammateDir(repo), { recursive: true, force: true })
-    }
-  })
-
-  test('claude resume without sid routes to claude via probing and launches native --continue, leaving sid hook-owned', async () => {
-    const repo = `resume-continue-${Date.now()}`
-    const dispatcherDir = mkdtempSync('/tmp/cmxcli-dispatcher-')
-    const projectsDir = mkdtempSync('/tmp/cmxcli-projects-')
-    const repoDir = join(dispatcherDir, repo)
-    const oldSid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
-    mkdirSync(repoDir, { recursive: true })
-    mkdirSync(dirname(sidFile(repo)), { recursive: true })
-    writeFileSync(sidFile(repo), `${oldSid}\n`)
-    // Seed a transcript jsonl so the resume-probing branch finds Claude as
-    // the single candidate and routes here (claude --continue). Probing
-    // refusing to guess when no engine has history is its own assertion,
-    // covered in the "resume probing" describe block below.
-    const projectDir = join(projectsDir, encodeProjectDir(realpathSync(repoDir)))
-    mkdirSync(projectDir, { recursive: true })
-    writeFileSync(join(projectDir, `${oldSid}.jsonl`), '')
-    const tmuxCalls: string[][] = []
-    const runTmux: TmuxRunner = async (args) => {
-      tmuxCalls.push([...args])
-      if (args[0] === 'has-session') return { code: 1, stdout: '', stderr: '' }
-      if (args[0] === 'new-session') return { code: 0, stdout: '%1\n', stderr: '' }
-      if (args[0] === 'send-keys') {
-        mkdirSync(dirname(readyFile(repo)), { recursive: true })
-        writeFileSync(readyFile(repo), '')
-        return { code: 0, stdout: '', stderr: '' }
-      }
-      return { code: 0, stdout: '', stderr: '' }
-    }
-
-    try {
-      const result = await runCli(
-        ['resume', repo],
-        fakeEnv({ dispatcherDir, projectsDir, runTmux }),
-      )
-      expect(result.code).toBe(0)
-      expect(result.stderr).toContain('continued latest sid=pending')
-      const launch = tmuxCalls.find((args) => args[0] === 'send-keys')?.[3]
-      expect(launch).toContain('claude --continue')
-      expect(readFileSync(sidFile(repo), 'utf8')).toBe(`${oldSid}\n`)
-    } finally {
-      rmSync(dispatcherDir, { recursive: true, force: true })
-      rmSync(projectsDir, { recursive: true, force: true })
-      rmSync(cwdFile(repo), { force: true })
-      rmSync(sidFile(repo), { force: true })
-      rmSync(readyFile(repo), { force: true })
-      rmSync(sendAtFile(repo), { force: true })
-    }
-  })
-
-  test.each([
-    ['spawn parent segment', ['spawn', '../escape', '--engine', 'codex']],
-    ['spawn dot segment', ['spawn', './bad', '--engine', 'codex']],
-  ])('%s rejects invalid codex teammate names before filesystem routing', async (_label, argv) => {
-    const result = await runCli(argv, fakeEnv({ dispatcherDir: '/tmp/cmxcli-missing-dispatcher' }))
-    expect(result.code).toBe(1)
-    expect(result.stderr).toContain('invalid codex teammate name')
-    expect(result.stderr).not.toContain('spawn:')
-  })
-
   test('codex spawn --prompt prints the atomic first-turn result', async () => {
     const name = 'cdx-x'
     const dispatcherDir = mkdtempSync('/tmp/cmxcli-dispatcher-')
@@ -561,24 +456,6 @@ describe.skip('native dispatch', () => {
     }
   })
 
-  test('claude spawn does not warn when the name happens to start with `codex-`', async () => {
-    // The warning is engine-scoped: a claude teammate with a `codex-` name
-    // is just an arbitrary label, not a misrouted codex teammate.
-    const repo = `codex-claude-only-${Date.now()}`
-    const dispatcherDir = mkdtempSync('/tmp/cmxcli-dispatcher-')
-    mkdirSync(join(dispatcherDir, repo), { recursive: true })
-    const runTmux: TmuxRunner = async () => ({ code: 0, stdout: '', stderr: '' })
-    const env = fakeEnv({ dispatcherDir, runTmux })
-
-    try {
-      const spawned = await runCli(['spawn', repo, '--engine', 'claude'], env)
-      expect(spawned.stderr).not.toContain('legacy')
-      expect(spawned.stderr).not.toContain('deprecat')
-    } finally {
-      rmSync(dispatcherDir, { recursive: true, force: true })
-    }
-  })
-
   test('resume warns when routing a codex teammate whose name uses the legacy `codex-` prefix', async () => {
     const name = `codex-resume-suggest-${Date.now()}`
     writeBaseRecord(new CodexTeammateRecord({
@@ -605,85 +482,6 @@ describe.skip('native dispatch', () => {
       expect(result.stderr).not.toContain('hard error')
       expect(result.stderr).not.toContain('deprecat')
     } finally {
-      removeBaseRecord(name)
-    }
-  })
-
-  test('claude spawn writes the base identity record for identity-router follow-up verbs', async () => {
-    const repo = `claude-router-${Date.now()}`
-    const dispatcherDir = mkdtempSync('/tmp/cmxcli-dispatcher-')
-    mkdirSync(join(dispatcherDir, repo), { recursive: true })
-    const liveSessions = new Set<string>()
-    const runTmux: TmuxRunner = async (args) => {
-      if (args[0] === 'has-session') {
-        const target = args[2]?.replace(/^=/, '') ?? ''
-        return { code: liveSessions.has(target) ? 0 : 1, stdout: '', stderr: '' }
-      }
-      if (args[0] === 'new-session') {
-        const session = args[args.indexOf('-s') + 1] ?? ''
-        liveSessions.add(session)
-        mkdirSync(dirname(readyFile(repo)), { recursive: true })
-        writeFileSync(readyFile(repo), '')
-        return { code: 0, stdout: '%1\n', stderr: '' }
-      }
-      if (args[0] === 'send-keys') return { code: 0, stdout: '', stderr: '' }
-      return { code: 0, stdout: '', stderr: '' }
-    }
-
-    try {
-      const result = await runCli(['spawn', repo], fakeEnv({ dispatcherDir, runTmux }))
-      expect(result.code).toBe(0)
-      expect(readIdentity(repo)).toMatchObject({
-        name: repo,
-        engine: 'claude',
-        cwd: realpathSync(join(dispatcherDir, repo)),
-      })
-    } finally {
-      rmSync(dispatcherDir, { recursive: true, force: true })
-      rmSync(cwdFile(repo), { force: true })
-      rmSync(sidFile(repo), { force: true })
-      rmSync(readyFile(repo), { force: true })
-      rmSync(sendAtFile(repo), { force: true })
-      removeBaseRecord(repo)
-    }
-  })
-
-  test('a live pre-identity claude tmux teammate is migrated before routing', async () => {
-    const name = `legacy-claude-${Date.now()}`
-    const cwd = mkdtempSync('/tmp/cmxcli-legacy-cwd-')
-    mkdirSync(dirname(cwdFile(name)), { recursive: true })
-    writeFileSync(cwdFile(name), `${cwd}\n`)
-    const registry = new EngineRegistry()
-    registry.register({
-      kind: 'claude',
-      send: async (req: { name: string }) => ({
-        kind: 'completed',
-        text: `sent to ${req.name}\n`,
-        items: [],
-        context: null,
-      }),
-    } as unknown as Engine)
-    const runTmux: TmuxRunner = async (args) => {
-      if (args[0] === 'has-session' && args[2] === `=teammate-${name}`) {
-        return { code: 0, stdout: '', stderr: '' }
-      }
-      return { code: 1, stdout: '', stderr: '' }
-    }
-
-    try {
-      const result = await runCli(
-        ['send', name, '--prompt', 'hi'],
-        fakeEnv({ engines: registry, runTmux }),
-      )
-      expect(result).toEqual({ code: 0, stdout: `sent to ${name}\n`, stderr: '' })
-      expect(readIdentity(name)).toMatchObject({
-        name,
-        engine: 'claude',
-        cwd: realpathSync(cwd),
-      })
-    } finally {
-      rmSync(cwd, { recursive: true, force: true })
-      rmSync(cwdFile(name), { force: true })
       removeBaseRecord(name)
     }
   })

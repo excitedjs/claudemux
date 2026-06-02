@@ -49,7 +49,6 @@ import type {
   WaitRequest,
 } from '../../src/engines/types'
 import { ClaudeTeammateRecord } from '../../src/engines/claude/persistence'
-import { decodeTmuxSessionName, tmuxSessionName } from '../../src/persistence/paths'
 import { CodexTeammateRecord } from '../../src/engines/codex/persistence'
 import { EmptyTeammateRouter } from '../../src/identity/router'
 import { killVerb } from '../../src/verbs/kill'
@@ -180,7 +179,7 @@ describe('TeammateRecord subclasses', () => {
     expect(rec.toJson().displayName).toBeNull()
   })
 
-  test('ClaudeTeammateRecord.engineExtensionFiles enumerates the four Phase 2a extension files', () => {
+  test('ClaudeTeammateRecord.engineExtensionFiles enumerates the sid/cwd pointers and the broker dir', () => {
     const rec = new ClaudeTeammateRecord({
       name: 'alpha',
       repo: '/tmp/alpha',
@@ -192,29 +191,8 @@ describe('TeammateRecord subclasses', () => {
     expect(rec.engineExtensionFiles()).toEqual([
       '/tmp/teammate-alpha.cwd',
       '/tmp/teammate-alpha.sid',
-      '/tmp/teammate-alpha.ready',
-      '/tmp/teammate-alpha.send-at',
+      '/tmp/teammate-claude-stream/alpha',
     ])
-  })
-
-  test('ClaudeTeammateRecord.tmuxSession composes the flat name without encoding', () => {
-    const rec = new ClaudeTeammateRecord({
-      name: 'flow-1',
-      repo: '/tmp/flow',
-      cwd: '/tmp/flow/.claude/worktrees/flow-1',
-      worktreeSlug: 'flow-1',
-      createdAt: 0,
-      displayName: null,
-    })
-    expect(rec.tmuxSession()).toBe('teammate-flow-1')
-  })
-
-  test('tmuxSessionName / decodeTmuxSessionName round-trip flat names', () => {
-    expect(tmuxSessionName('foo')).toBe('teammate-foo')
-    expect(tmuxSessionName('flow-1')).toBe('teammate-flow-1')
-    expect(decodeTmuxSessionName('teammate-foo')).toBe('foo')
-    expect(decodeTmuxSessionName('teammate-flow-1')).toBe('flow-1')
-    expect(decodeTmuxSessionName('not-a-teammate')).toBeNull()
   })
 })
 

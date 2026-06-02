@@ -34,9 +34,7 @@
 #   7. Print verification next steps.
 #
 # Not done here:
-#   - Installing hooks. They ship with the plugin (hooks/hooks.json) and
-#     follow the plugin's install/uninstall lifecycle.
-#   - Starting tmux, claude, or any teammate.
+#   - Starting claude or any teammate.
 #   - Editing ~/.claude/settings.json. The /claudemux:setup command's Step 2
 #     handles Remote Control opt-in.
 #   - Checking system dependencies (tmux, jq, claude). Step 0 of the
@@ -365,8 +363,8 @@ Notes:
     $SETTINGS_FILE) and falls back to \$PWD if that env is unset. The env
     is what protects \`tm\` from Bash-tool cwd drift — sanity-check with
     \`tm doctor\` from inside the dispatcher claude session.
-  * The Stop hook touches /tmp/claude-idle/<sid> for every Claude Code
-    session, including the dispatcher itself. Nothing waits on that signal.
+  * Each Claude teammate runs as a stream-json broker that writes the
+    /tmp/claude-idle/<sid> turn signal the waiting verbs read.
   * Teammate session lookup lives in tm history. AutoMemory remains
     Claude-owned and is not managed by this script.
 $workspace_note

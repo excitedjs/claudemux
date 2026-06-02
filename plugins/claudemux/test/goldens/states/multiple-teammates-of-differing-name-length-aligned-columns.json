@@ -1,5 +1,0 @@
-{
-  "code": 0,
-  "stdout": "NAME                                                            REPO  WORKTREE  ENGINE  STATE    LAST    PREVIEW\nclaudemux-conftest-b3f82c39c7e4                                 -     -         claude  unknown  42B/2h  reply for claudemux-conftest-b3f82c39c7e4\nclaudemux-conftest-526abb5b6bae-and-a-considerably-longer-name  -     -         claude  unknown  73B/2h  reply for claudemux-conftest-526abb5b6bae-and-a-co\n",
-  "stderr": ""
-}

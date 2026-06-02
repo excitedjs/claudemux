@@ -30,7 +30,7 @@ and what contracts they hold.
 > only runtime dependency, reached through the `#ws` subpath in the
 > plugin's `package.json` `imports` map. The conformance harness compares
 > native output to committed golden JSON files under
-> [`test/goldens/`](/plugins/claudemux/test/goldens).
+> `test/goldens/`.
 >
 > [Decision multi-engine-tui-architecture](/.agents/decisions/multi-engine-tui-architecture.md)
 > shapes the core around an `Engine` interface, a single `TeammateRecord`
@@ -209,10 +209,10 @@ for the alternatives and the reasoning behind this shape.
 ## Native verbs and the conformance harness
 
 The **conformance harness**
-([`test/conformance.test.ts`](/plugins/claudemux/test/conformance.test.ts))
+(`test/conformance.test.ts`)
 pins each native verb's behavior against a committed **golden** JSON file
 per scenario at
-[`test/goldens/<verb>/<slug>.json`](/plugins/claudemux/test/goldens). For
+`test/goldens/<verb>/<slug>.json`. For
 each scenario the harness runs the native handler once and asserts its
 `{code, stdout, stderr}` matches the golden; a mutating verb (`kill`,
 `reload`) additionally pins its post-state to a sibling

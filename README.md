@@ -2,9 +2,9 @@
 
 # claudemux
 
-> `claude` + `tmux`. One dispatcher Claude Code session talks to you. One
-> teammate Claude Code per repo runs in its own `tmux` session. You
-> orchestrate the fleet in plain language.
+> One dispatcher Claude Code session talks to you. One teammate Claude Code
+> per repo runs headless behind a stream-json broker. You orchestrate the
+> fleet in plain language.
 
 > **Worktree default + name decoupling (1.0 cut).** `tm spawn <path>` now
 > takes a filesystem path; the teammate name is a flat identifier
@@ -24,15 +24,15 @@ flowchart TB
     user(["You<br/>(terminal · web · mobile)"])
 
     subgraph dispatcher_dir["dispatcher directory · the parent of your repos"]
-        dispatcher["dispatcher<br/>(claude in tmux, talks to you)"]
+        dispatcher["dispatcher<br/>(claude, talks to you)"]
         repoA[("repo-a/")]
         repoB[("repo-b/")]
         repoC[("repo-c/")]
     end
 
-    subgraph teammates["teammates · one tmux session per repo"]
-        tA["teammate-repo-a<br/>(claude in repo-a/)"]
-        tB["teammate-repo-b<br/>(claude in repo-b/)"]
+    subgraph teammates["teammates · one stream-json broker per repo"]
+        tA["teammate-repo-a<br/>(headless claude in repo-a/)"]
+        tB["teammate-repo-b<br/>(headless claude in repo-b/)"]
     end
 
     user <-->|chat| dispatcher
@@ -45,9 +45,10 @@ flowchart TB
 
 ## Drive teammates from anywhere
 
-Every teammate is a real `claude` REPL with a Remote Control URL. Open the
-URL in a browser or the mobile app and you're talking to that teammate
-directly — no terminal needed.
+Every teammate is a real headless `claude` session. Spawn one with Remote
+Control enabled (`tm spawn … --remote-control`) and the broker hands the
+session to claude.ai — open the URL in a browser or the mobile app and you're
+talking to that teammate directly, no terminal needed.
 
 - Check on a long-running teammate from your phone on the subway.
 - Hand a teammate the next task from a laptop in a cafe while the
@@ -136,11 +137,11 @@ globally unique.
 | `tm states` | Fleet snapshot: `NAME REPO WORKTREE ENGINE STATE LAST PREVIEW` — `state` reports `idle` / `busy` / `borrowed` / `unknown`. |
 | `tm spawn <path> [--name <id>] [--intent "…"] [--engine claude\|codex] [--prompt "…"] [--no-worktree] [--remote-control\|--no-remote-control] [--no-preamble] [--timeout N]` | Launch a teammate in `<path>` (absolute or relative to the dispatcher dir). Default places the teammate inside a git worktree at `<path>/.claude/worktrees/<name>/` (branch `worktree-<name>`, base ref `HEAD`); `--no-worktree` runs in `<path>` itself. `--name <id>` sets the explicit identifier (globally unique); omit it for an auto-generated `<basename(path)>-<rand4>`. `--intent` records a short queryable subject for `tm history`. `--remote-control` enables Claude Remote Control for just this teammate; `--no-remote-control` leaves it off (both override the `CLAUDEMUX_REMOTE_CONTROL` config default, but neither can suppress a user-global `remoteControlAtStartup`; Claude-only). When a [prompt preamble](#prompt-preamble) profile is configured, a fresh `--prompt` spawn prepends the matching repo's standing reminder; `--no-preamble` opts that spawn out. With `--prompt`, atomic bootstrap: spawn + send + wait + print the first-turn reply on stdout. |
 | `tm resume <name> [<sid-or-thread-id>] [--prompt "…"] [--engine claude\|codex]` / `tm resume --engine <e> --repo <path> --id <id> [--name <fresh>]` | Resume a prior conversation by teammate name, or resume an orphaned `tm history` row by repo/id. `--id` accepts a full id or an unambiguous prefix. `--prompt` sends a follow-up after relaunch (atomic like `spawn --prompt`). |
-| `tm send <name> --prompt "…" [--pane-quiet] [--timeout N]` | **Atomic round-trip**: send prompt + wait for the Stop hook + print the reply on stdout. The Stop-hook path also echoes the teammate's post-turn ctx to stderr (`ctx: N tokens · …`), eliminating the common "send, then `tm ctx`" follow-up; skipped on `--pane-quiet`. `--prompt` matches the calling form of `tm spawn --prompt` / `tm resume --prompt`; flag order is free. `--pane-quiet` fallback for TUI-only commands (`/help`, `/effort`, permission prompts) that fire no hook. Exit codes: `0` reply landed; `124` sync wait expired and the teammate is still running (re-collect with `tm wait <name>`; do NOT respawn — the name is taken); `1` real failure (no session, sid marker missing, …). |
-| `tm wait <name> [timeout=600] [--fresh] [--pane-quiet] [--timeout N]` | Block until the teammate's next Stop event and print the reply (ctx echo on stderr, same as `tm send`). Use when an external actor (Remote Control, mobile app, cron) drove the turn. `--fresh` waits for the NEXT Stop instead of returning on a stale marker (no-op under `--pane-quiet`). `--timeout N` is equivalent to the positional `[timeout]`. Same exit codes as `tm send`. |
-| `tm compact <name> [timeout=600] [--timeout N]` | Send `/compact` and verify PostCompact fired. Prints `compacted` on success. Default 600s — large contexts (~300k+) routinely take 3-4 minutes. Exit codes: `0` PostCompact fired; `1` `/compact` refused with "Not enough messages to compact"; `124` PostCompact never fired within `--timeout`. |
+| `tm send <name> --prompt "…" [--pane-quiet] [--timeout N]` | **Atomic round-trip**: send the prompt to the teammate's broker, wait for the turn's `result`, and print the reply on stdout. The post-turn ctx (`ctx: in=… out=… cost=…`) is echoed to stderr, eliminating the common "send, then `tm ctx`" follow-up. `--prompt` matches the calling form of `tm spawn --prompt` / `tm resume --prompt`; flag order is free. Exit codes: `0` reply landed; `124` sync wait expired and the teammate is still running (re-collect with `tm wait <name>`; do NOT respawn — the name is taken); `1` real failure (no running teammate, …). |
+| `tm wait <name> [timeout=600] [--fresh] [--pane-quiet] [--timeout N]` | Block until the teammate's next turn `result` and print the reply (ctx echo on stderr, same as `tm send`). Use when an external actor (Remote Control, mobile app) drove the turn. `--fresh` waits for the NEXT turn instead of returning the last one. `--timeout N` is equivalent to the positional `[timeout]`. Same exit codes as `tm send`. |
+| `tm compact <name> [timeout=600] [--timeout N]` | Send `/compact` as a turn and report `compacted` when it completes. Default 600s — large contexts (~300k+) routinely take 3-4 minutes. Exit codes: `0` compacted; `1` failure; `124` did not complete within `--timeout`. |
 | `tm last <name> [--verbose]` | Print the full text of the teammate's last reply. Fresh-spawn sentinel: dies with "no reply yet" when called before any turn has settled. `--verbose` prints the raw Codex turn JSON for Codex teammates. |
-| `tm kill <name> [--status <merged\|done\|shelved\|abandoned\|blocked>] [--note "…"]` / `tm kill --id <id> --status <status> [--note "…"]` | Graceful `/exit` (clean worktree auto-removed by Claude); dirty worktree preserved with a stderr note pointing at `git worktree remove --force`. Falls back to `tmux kill-session` (SIGHUP) when graceful exit times out. `--status` records queryable close metadata for `tm history --status`; `--id` records close metadata for an already-dead session without stopping a process. |
+| `tm kill <name> [--status <merged\|done\|shelved\|abandoned\|blocked>] [--note "…"]` / `tm kill --id <id> --status <status> [--note "…"]` | Stops the teammate's broker and its `claude` child and reaps the runtime files. A clean worktree is removed; a dirty or unmerged worktree is preserved with a stderr note pointing at `git worktree remove --force`. `--status` records queryable close metadata for `tm history --status`; `--id` records close metadata for an already-dead session without stopping a process. |
 | `tm ctx <name>… \| --all [--window 200k\|1m]` | Real context-window usage per teammate, read from the jsonl `usage` block. More accurate than the TUI percentage. |
 | `tm history [--repo <path>] [--name <glob>] [--id <id>] [--since <time>] [--until <time>] [--state <state>] [--status <status>] [--grep <text>] [--limit N] [--cursor N] [--fields a,b,c] [--oneline\|--table]` | Query past and live teammate sessions. Default output is bounded JSON with full ids, timestamps, close status, bounded previews, and `resumeCommand` when recoverable. Legacy `tm history <name>` is removed; use flags. |
 | `tm mem <name>` | Cat the parent repo's auto-memory `MEMORY.md` (feature-gate names, branch names, in-progress projects). Worktree teammates share their parent repo's AutoMemory — `tm mem` resolves through `identity.repo`, not the runtime cwd. Missing memory → stderr notice + exit 0 + empty stdout. |
@@ -165,9 +166,8 @@ weekly pass.
 | Tool | Why |
 |---|---|
 | Claude Code CLI | The plugin attaches to it. |
-| Node 22.7+ | The plugin launcher runs the orchestration core (TypeScript) through Node's experimental type-transform pipeline directly from source. The npm package ships compiled JavaScript for `node_modules` installs. |
-| `tmux` | Teammates live in tmux sessions. |
-| `jq` | The Stop hook parses harness JSON. |
+| Node 22.7+ | The plugin launcher runs the orchestration core (TypeScript) — including the per-teammate stream-json broker — through Node's experimental type-transform pipeline directly from source. The npm package ships compiled JavaScript for `node_modules` installs. |
+| `jq` | The `/claudemux:setup` script edits `settings.json` with it. |
 | `bash` | Plugin scripts use Bash features. |
 | macOS or Linux | Scripts use BSD `stat`; Windows is unsupported. |
 
@@ -224,11 +224,15 @@ npx -y @excitedjs/tm <verb>
 - **Single dispatcher root.** A relative `tm spawn <path>` resolves
   against `TM_DISPATCHER_DIR` (or `$PWD`), so sibling repos must share
   one parent. Absolute paths bypass that limit.
-- **macOS / Linux only.** Scripts use BSD `stat`; GNU Linux needs
-  `-c %Y` — PRs welcome.
+- **Cross-platform is in progress (issue #48).** The teammate transport is
+  now the Node stream-json broker — no tmux, no `capture-pane`. What remains for
+  a Windows port is the unix-domain socket the broker (and the Codex daemon) use
+  for `tm`↔runtime IPC, the `/tmp` path assumptions, and the `column` / `grep`
+  shell-outs in table rendering. macOS and Linux are supported today.
 - **Cron only fires inside an interactive TUI REPL.** The dispatcher session
-  and `tm`-spawned Claude tmux sessions qualify; `claude -p` and Agent Teams
-  subagents accept the `CronCreate` call but silently never fire.
+  qualifies; `tm`-spawned teammates now run headless (`claude -p`), so — like
+  Agent Teams subagents — they accept the `CronCreate` call but silently never
+  fire. Schedule cron work from the dispatcher.
 
 ## Local development
 
@@ -282,7 +286,7 @@ plugin version and changelog.
 /plugin uninstall claudemux
 ```
 
-Removes the plugin and its hooks. Your dispatcher directory's
+Removes the plugin. Your dispatcher directory's
 `CLAUDE.md` is left in place — delete it by hand if you don't want it.
 
 ## License

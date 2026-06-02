@@ -92,6 +92,7 @@ heart of the system; see [the cross-process protocol](/.agents/domains/cross-pro
 
 **Proposals** — current design proposals that have not become decisions:
 
+- [Claude stream-json transport](/.agents/proposals/claude-stream-json-transport.md) — replacing the Claude engine's tmux send-keys / capture-pane bridge with the Agent SDK stream-json stdio protocol (issue #49), and the resulting reassessment of cross-platform portability (issue #48).
 - [Codex multi-client live sync](/.agents/proposals/codex-multiclient-live-sync.md) — options for making claudemux Codex teammates visible to Desktop and VS Code clients.
 - Archived input drafts also live under `proposals/` — the two multi-engine architecture drafts and the phase-1 bug audit — reachable from the decision they fed, [multi-engine-tui-architecture](/.agents/decisions/multi-engine-tui-architecture.md). Each carries a status banner.
 

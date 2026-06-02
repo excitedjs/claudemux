@@ -4,8 +4,8 @@
 
 > **worktree 默认 + name/repo 解耦(1.0 切换)**。`tm spawn <path>` 改为吃文件系统路径;teammate `<name>` 是独立的 flat 标识符(`--name` 显式给,或自动生成 `<basename>-<rand4>`)。其余 verb 全部按 `<name>` 寻址。Teammate 默认跑在 `<path>/.claude/worktrees/<name>/` 这个 worktree 里;`--no-worktree` 退出。**升级前的 teammate 需要 `tm kill` 然后重新 `tm spawn` —— schema 1 → 2 没有静默迁移。**Codex 路径暂不支持 `.worktreeinclude`,需要 `.env` 等文件请手动拷贝到 worktree。决策记录:[`.agents/decisions/worktree-default-and-name-repo-decoupling.md`](./.agents/decisions/worktree-default-and-name-repo-decoupling.md)。
 
-> `claude` + `tmux`。一个 dispatcher 会话跟你对话,每个 repo 一个 teammate
-> 跑在自己的 tmux session 里,你用大白话指挥整支 fleet。
+> 一个 dispatcher 会话跟你对话,每个 repo 一个 teammate 跑在 headless 的
+> stream-json broker 后面,你用大白话指挥整支 fleet。
 
 ## 架构
 
@@ -14,15 +14,15 @@ flowchart TB
     user(["你<br/>(终端 · 网页 · 移动端)"])
 
     subgraph dispatcher_dir["dispatcher 目录 · 你 repo 的共同父目录"]
-        dispatcher["dispatcher<br/>(tmux 里的 claude,跟你对话)"]
+        dispatcher["dispatcher<br/>(claude,跟你对话)"]
         repoA[("repo-a/")]
         repoB[("repo-b/")]
         repoC[("repo-c/")]
     end
 
-    subgraph teammates["teammates · 每个 repo 一个 tmux session"]
-        tA["teammate-repo-a<br/>(claude in repo-a/)"]
-        tB["teammate-repo-b<br/>(claude in repo-b/)"]
+    subgraph teammates["teammates · 每个 repo 一个 stream-json broker"]
+        tA["teammate-repo-a<br/>(repo-a/ 里的 headless claude)"]
+        tB["teammate-repo-b<br/>(repo-b/ 里的 headless claude)"]
     end
 
     user <-->|聊天| dispatcher
@@ -35,8 +35,9 @@ flowchart TB
 
 ## 跨设备驱动 teammate
 
-每个 teammate 都是真实的 `claude` REPL,自带 Remote Control URL。浏览器
-打开、手机 app 打开,就是直接在跟这个 teammate 对话——不用回终端。
+每个 teammate 都是真实的 headless `claude` 会话。spawn 时开 Remote Control
+(`tm spawn … --remote-control`),broker 会把会话交给 claude.ai——浏览器
+打开、手机 app 打开,就是直接在跟这个 teammate 对话,不用回终端。
 
 - 地铁上用手机看长跑的 teammate 进展
 - 咖啡馆笔记本上接着派新活,dispatcher 同时继续协调其他 teammate
@@ -119,18 +120,18 @@ Claude Code 会话里 `tm` 自动在 `PATH` 上。会话外用法见
 | `tm states` | 整体快照:`NAME REPO WORKTREE ENGINE STATE LAST PREVIEW`,`state` 是 `idle` / `busy` / `unknown`。 |
 | `tm spawn <path> [--name <id>] [--intent "…"] [--engine claude\|codex] [--prompt "…"] [--no-worktree] [--remote-control\|--no-remote-control] [--no-preamble] [--timeout N]` | 在 `<path>` 起 teammate(绝对路径,或者相对 dispatcher 根目录)。默认把 teammate 放进 `<path>/.claude/worktrees/<name>/` 这个 worktree(分支 `worktree-<name>`,base ref `HEAD`);`--no-worktree` 直接跑在 `<path>` 本身。`--name <id>` 显式给名字(全局唯一);不传就是 `<basename(path)>-<rand4>`。`--intent` 记录一个短 subject,供 `tm history` 查询。`--remote-control` 只给这一个 teammate 开 Claude Remote Control;`--no-remote-control` 让它不开(两者都盖过 `CLAUDEMUX_REMOTE_CONTROL` config 默认,但都压不住用户全局 `remoteControlAtStartup`;仅 Claude)。配了 [prompt preamble](#prompt-preamble) profile 时,fresh `--prompt` spawn 会把命中 repo 的常驻提醒前置到 prompt;`--no-preamble` 让这次 spawn 不带。带 `--prompt` 即原子 bootstrap:spawn + send + 等 Stop + 把首轮回话打到 stdout。 |
 | `tm resume <name> [<sid-or-thread-id>] [--prompt "…"] [--engine claude\|codex]` / `tm resume --engine <e> --repo <path> --id <id> [--name <fresh>]` | 按 teammate 名字恢复旧会话,或按 `tm history` 行里的 repo/id 恢复孤儿会话。`--id` 接受完整 id 或无歧义前缀。`--prompt` 在重连后派 prompt(行为同 `spawn --prompt`)。 |
-| `tm send <name> --prompt "…" [--pane-quiet] [--timeout N]` | **原子 round-trip**:发 prompt + 等 Stop + 把回话打到 stdout。Stop-hook 路径还把当前 ctx 顺手打到 stderr(`ctx: N tokens · …`),消灭 send 完再单独 `tm ctx` 的高频模式;`--pane-quiet` 不打。`--prompt` 和 `tm spawn --prompt` / `tm resume --prompt` 一套写法;flag / `<name>` 顺序自由。`--pane-quiet` 给 TUI-only(`/help` / `/effort` / 权限弹窗)兜底,这些路径不触发 hook。退码:`0` 拿到回话;`124` sync wait 超时,但 teammate 还在跑(用 `tm wait <name>` 续等;别重新 spawn,name 还占着);`1` 真失败(没 session / sid marker 缺失等)。 |
-| `tm wait <name> [timeout=600] [--fresh] [--pane-quiet] [--timeout N]` | 阻塞到 teammate 下一次 Stop,打回话到 stdout(ctx 走 stderr,行为同 `tm send`)。外部驱动(Remote Control / 移动端 / cron)推动的 turn 用这个收。`--fresh` 等下一次 Stop 而不是被已有 marker 立即满足(`--pane-quiet` 模式下 `--fresh` 不生效)。`--timeout N` 等价位置参数 `[timeout]`。退码同 `tm send`。 |
-| `tm compact <name> [timeout=600] [--timeout N]` | 发 `/compact` + 等 PostCompact;成功 stdout 一行 `compacted`。默认 600s 是因为大上下文(~300k+)实测要 3-4 分钟。退码:`0` PostCompact 触发;`1` Claude Code 回 "Not enough messages to compact";`124` `--timeout` 到了 PostCompact 还没触发。 |
+| `tm send <name> --prompt "…" [--pane-quiet] [--timeout N]` | **原子 round-trip**:把 prompt 发给 teammate 的 broker,等这轮的 `result`,把回话打到 stdout。当前 ctx(`ctx: in=… out=… cost=…`)顺手打到 stderr,消灭 send 完再单独 `tm ctx` 的高频模式。`--prompt` 和 `tm spawn --prompt` / `tm resume --prompt` 一套写法;flag / `<name>` 顺序自由。退码:`0` 拿到回话;`124` sync wait 超时,但 teammate 还在跑(用 `tm wait <name>` 续等;别重新 spawn,name 还占着);`1` 真失败(没在跑的 teammate 等)。 |
+| `tm wait <name> [timeout=600] [--fresh] [--pane-quiet] [--timeout N]` | 阻塞到 teammate 下一轮 `result`,打回话到 stdout(ctx 走 stderr,行为同 `tm send`)。外部驱动(Remote Control / 移动端)推动的 turn 用这个收。`--fresh` 等下一轮而不是返回上一轮。`--timeout N` 等价位置参数 `[timeout]`。退码同 `tm send`。 |
+| `tm compact <name> [timeout=600] [--timeout N]` | 把 `/compact` 当一轮发出去,完成后报 `compacted`。默认 600s 是因为大上下文(~300k+)实测要 3-4 分钟。退码:`0` 压缩完成;`1` 失败;`124` `--timeout` 到了还没完成。 |
 | `tm last <name> [--verbose]` | 打印 teammate 上一轮回复的完整正文。fresh spawn 之后还没派活时,die 报 "no reply yet"。Codex teammate 加 `--verbose` 打原始 turn JSON。 |
-| `tm kill <name> [--status <merged\|done\|shelved\|abandoned\|blocked>] [--note "…"]` / `tm kill --id <id> --status <status> [--note "…"]` | 优雅 `/exit`(clean worktree 由 Claude 自动清);dirty worktree 保留并在 stderr 提示用 `git worktree remove --force` 收尾。`/exit` 超时则 fallback `tmux kill-session`(SIGHUP)。`--status` 给 `tm history --status` 写可查询收尾状态;`--id` 给已经死掉的会话补登收尾状态,不停止进程。 |
+| `tm kill <name> [--status <merged\|done\|shelved\|abandoned\|blocked>] [--note "…"]` / `tm kill --id <id> --status <status> [--note "…"]` | 停掉 teammate 的 broker 和它的 `claude` 子进程,清理运行时文件。clean worktree 自动清;dirty 或有未合并提交的 worktree 保留并在 stderr 提示用 `git worktree remove --force` 收尾。`--status` 给 `tm history --status` 写可查询收尾状态;`--id` 给已经死掉的会话补登收尾状态,不停止进程。 |
 | `tm ctx <name>… \| --all [--window 200k\|1m]` | 每个 teammate 的真实上下文用量,从 jsonl 的 `usage` 字段读,比 TUI 那个百分比准。 |
 | `tm history [--repo <path>] [--name <glob>] [--id <id>] [--since <time>] [--until <time>] [--state <state>] [--status <status>] [--grep <text>] [--limit N] [--cursor N] [--fields a,b,c] [--oneline\|--table]` | 查询过往和在飞 teammate 会话。默认输出有界 JSON,包含完整 id、时间、收尾状态、短 preview,以及可恢复时的 `resumeCommand`。旧 `tm history <name>` 裸名语法已删除,请用 flags。 |
 | `tm mem <name>` | cat 父 repo 的 auto-memory `MEMORY.md`(FG 名 / 分支 / 进行中项目)。Worktree teammate 跟父 repo 共享 AutoMemory——`tm mem` 走 `identity.repo`,不是运行时 cwd。文件不存在 → stderr 一行提示 + exit 0 + 空 stdout。 |
 | `tm reload <name>… \| --all` | 给 teammate 派 `/reload-plugins`,插件更新后用。 |
 
-诊断用(上面 verb 都不合适时再用):`tm status <name>` 抓实时 pane,
-`tm poll <name> <regex>` 等中间状态。
+诊断用(上面 verb 都不合适时再用):`tm status <name>` 看 broker 快照
+(session id / model / state / 最近回复),`tm poll <name> <regex>` 等中间状态。
 
 行为契约和磁盘状态见
 [`plugins/claudemux/skills/dispatcher/SKILL.md`](plugins/claudemux/skills/dispatcher/SKILL.md)。
@@ -146,11 +147,10 @@ Claude Code 会话里 `tm` 自动在 `PATH` 上。会话外用法见
 | 工具 | 用途 |
 |---|---|
 | Claude Code CLI | 插件挂在它上面。 |
-| Node 22.7+ | 插件 launcher 直接用 Node 的实验性 type-transform 跑 TypeScript 源码; npm 包在 `node_modules` 安装路径下运行编译后的 JavaScript。 |
-| `tmux` | Teammate 跑在 tmux session 里。 |
-| `jq` | Stop hook 解析 harness JSON。 |
+| Node 22.7+ | 插件 launcher 直接用 Node 的实验性 type-transform 跑编排核心(含每个 teammate 的 stream-json broker)的 TypeScript 源码;npm 包在 `node_modules` 安装路径下运行编译后的 JavaScript。 |
+| `jq` | `/claudemux:setup` 脚本用它改 `settings.json`。 |
 | `bash` | 插件脚本用 Bash 特性。 |
-| macOS 或 Linux | 脚本用 BSD `stat`,Windows 不支持。 |
+| macOS 或 Linux | 安装脚本和 IPC 假设 POSIX;Windows 移植见 issue #48。 |
 
 ## 配置
 
@@ -200,11 +200,13 @@ npx -y @excitedjs/tm <verb>
 - **只支持单 dispatcher 根**。相对路径的 `tm spawn <path>` 按
   `TM_DISPATCHER_DIR`(或 `$PWD`)解,sibling repo 必须共享一个父目录;
   绝对路径绕过这条限制。
-- **只 macOS / Linux**。脚本用 BSD `stat`,GNU Linux 需要
-  `-c %Y`——PR welcome。
-- **Cron 只在交互式 TUI REPL 里 fire**。dispatcher 和 `tm` 拉起的 Claude
-  tmux teammate 都算;`claude -p` 和 Agent Teams subagent 调用 `CronCreate`
-  会返回成功但永不触发。
+- **跨平台进行中(issue #48)**。teammate 传输现在是 Node stream-json
+  broker——没有 tmux、没有 `capture-pane`。Windows 移植剩下的是 broker(和
+  Codex daemon)做 `tm`↔运行时 IPC 用的 unix socket、`/tmp` 路径假设,以及
+  表格渲染里的 `column` / `grep` shell-out。今天支持 macOS 和 Linux。
+- **Cron 只在交互式 TUI REPL 里 fire**。dispatcher 算;`tm` 拉起的 teammate
+  现在跑 headless(`claude -p`),所以和 Agent Teams subagent 一样——调用
+  `CronCreate` 会返回成功但永不触发。cron 活从 dispatcher 排。
 
 ## 本地开发
 
@@ -255,7 +257,7 @@ feature PR 将 `.changeset/*.md` 随改动一起提交;`next`/`main` 上的 rele
 /plugin uninstall claudemux
 ```
 
-插件和它的 hook 一起摘掉。dispatcher 目录里的 `CLAUDE.md` 留在原地——
+把插件摘掉。dispatcher 目录里的 `CLAUDE.md` 留在原地——
 不想要就手动删。
 
 ## 许可

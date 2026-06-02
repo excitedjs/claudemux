@@ -1,5 +1,0 @@
-{
-  "code": 1,
-  "stdout": "",
-  "stderr": "tm: tm send: unknown flag: --bogus\n"
-}

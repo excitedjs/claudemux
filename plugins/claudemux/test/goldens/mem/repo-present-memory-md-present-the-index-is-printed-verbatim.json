@@ -1,5 +1,0 @@
-{
-  "code": 1,
-  "stdout": "",
-  "stderr": "tm: tm mem: no identity record for 'claudemux-conftest-d47350d34d3a'. Spawn it with 'tm spawn <path> --name claudemux-conftest-d47350d34d3a' first, or check 'tm ls'.\n"
-}

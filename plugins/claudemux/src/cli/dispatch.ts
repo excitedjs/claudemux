@@ -542,9 +542,10 @@ async function dispatchEngineVerb(
 }
 
 async function doctorDispatch(args: readonly string[], env: NativeEnv): Promise<TmResult> {
-  return claudeDoctor(args, env, {
+  return claudeDoctor(args, {
     tmWrapper: tmWrapperPath(),
     pluginJson: pluginJsonPath(),
+    dispatcherDir: env.dispatcherDir,
   })
 }
 

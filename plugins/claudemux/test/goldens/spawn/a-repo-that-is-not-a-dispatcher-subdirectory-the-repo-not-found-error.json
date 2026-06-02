@@ -1,5 +1,0 @@
-{
-  "code": 1,
-  "stdout": "",
-  "stderr": "tm: tm spawn: <path> 'claudemux-conftest-396d2cd6653b' does not exist (resolved to <SCRATCH>/dispatcher/claudemux-conftest-396d2cd6653b)\n"
-}

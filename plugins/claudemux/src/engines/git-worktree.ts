@@ -1,11 +1,11 @@
 /**
- * Self-managed git worktree helpers — used by engines (currently
- * Codex) that do not have a native worktree concept.
+ * Self-managed git worktree helpers — used by every engine that drives
+ * a teammate headlessly and has no native worktree flag of its own.
  *
- * The Claude engine relies on `claude --worktree <slug>` and does not
- * call into this module. Codex has no equivalent flag, so claudemux
- * drives `git worktree add` / `git worktree remove` itself; the
- * resulting worktree layout matches Claude's:
+ * Both the Codex daemon and the Claude stream-json broker run `claude`
+ * / `codex` non-interactively, so claudemux drives `git worktree add` /
+ * `git worktree remove` itself rather than relying on an interactive
+ * `--worktree` flag; the resulting layout is identical:
  *
  *     <repo>/.claude/worktrees/<slug>     ← runtime cwd
  *     branch: worktree-<slug>             ← matches `claude --worktree`
@@ -135,3 +135,9 @@ export async function reapCodexWorktree(
   }
   return { kind: 'preserved-unmerged', path, branch }
 }
+
+// Engine-neutral aliases. The implementations are shared verbatim by the Codex
+// daemon and the Claude stream-json broker; the `*Codex*` names are retained
+// for the existing Codex call sites and their conformance goldens.
+export const provisionWorktree = provisionCodexWorktree
+export const reapWorktree = reapCodexWorktree

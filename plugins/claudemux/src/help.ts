@@ -97,8 +97,9 @@ still running; 1 failure.
 Send one turn, wait for completion, print reply text on stdout. Status and ctx
 lines go to stderr.
 
---pane-quiet waits for pane quiet instead of the Stop hook; use for TUI-only
-commands. --timeout defaults to 1800s.
+--pane-quiet is accepted for compatibility and has no effect under the
+stream-json transport — every turn resolves from the result envelope.
+--timeout defaults to 1800s.
 
 Exit codes: 0 reply printed; 124 wait expired but teammate is still running;
 1 failure. Re-collect 124 with tm wait <name> or inspect with tm status <name>.
@@ -108,9 +109,10 @@ Exit codes: 0 reply printed; 124 wait expired but teammate is still running;
 
 Wait for the next teammate completion and print reply text on stdout.
 
-Use --fresh when no tm send reset the baseline for this turn. --pane-quiet uses
-pane quiet instead of the Stop hook. If both positional timeout and --timeout
-are present, the later parsed value wins.
+Use --fresh to wait for the NEXT turn (e.g. one driven by Remote Control)
+instead of returning the last one. --pane-quiet is accepted for compatibility
+and has no effect. If both positional timeout and --timeout are present, the
+later parsed value wins.
 
 Exit codes match tm send.
 `,
@@ -210,19 +212,22 @@ Close statuses: merged, done, shelved, abandoned, blocked.
 
   status: `tm status <name> [lines=80]
 
-Diagnostic capture-pane. Use when send/wait cannot tell you the live TUI state.
+Diagnostic snapshot from the teammate's broker — session id, model, state, and
+the latest reply (no live pane in headless stream-json). Use when send/wait
+cannot tell you the live state.
 `,
 
   poll: `tm poll <name> <regex> [timeout=180]
 
-Diagnostic pane wait. Match the expected result, not text from the prompt you
-just sent.
+Diagnostic wait — block until the teammate's latest reply matches the regex.
+Match the expected result, not text from the prompt you just sent.
 `,
 
   doctor: `tm doctor
 
-Read-only environment check: tm path/version, dispatcher dir, tmux status,
-idle dir, and active teammates. Always exits 0; read the printed lines.
+Read-only environment check: tm path/version, dispatcher dir, the claude
+binary, and active teammates (stream-json brokers + codex daemons). Always
+exits 0; read the printed lines.
 `,
 }
 

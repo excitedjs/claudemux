@@ -1,5 +1,0 @@
-{
-  "code": 1,
-  "stdout": "",
-  "stderr": "tm: usage: tm poll <repo> <regex> [timeout=180]\n"
-}
