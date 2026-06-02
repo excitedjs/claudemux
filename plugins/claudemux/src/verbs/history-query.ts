@@ -8,6 +8,7 @@ import { basename, isAbsolute, join } from 'node:path'
 
 import type { EngineKind, TeammateListing } from '../engines/types'
 import { readCodexRolloutSnapshot, listCodexRolloutFiles } from '../engines/codex/rollout'
+import { codexHistoryPromptFromEntry } from '../engines/codex/history-prompt'
 import {
   listHistoryIndexRecords,
   type HistoryCloseStatus,
@@ -296,33 +297,6 @@ function readClaudeTranscript(path: string): {
   return { firstPrompt, lastAssistant, createdAt: firstTs, createdAtMs }
 }
 
-function textFromCodexContent(content: unknown): string | null {
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return null
-  const parts: string[] = []
-  for (const item of content) {
-    if (!isPlainObject(item)) continue
-    const type = item['type']
-    if (type !== 'input_text' && type !== 'output_text' && type !== 'text') continue
-    const text = stringProp(item, 'text')
-    if (text !== null) parts.push(text)
-  }
-  return parts.length === 0 ? null : parts.join(' ')
-}
-
-function promptFromCodexEntry(entry: unknown): string | null {
-  if (!isPlainObject(entry)) return null
-  const payload = entry['payload']
-  if (!isPlainObject(payload)) return null
-  if (payload['type'] === 'user_message' || payload['type'] === 'userMessage') {
-    return stringProp(payload, 'message') ?? stringProp(payload, 'text')
-  }
-  if (entry['type'] === 'response_item' && payload['type'] === 'message' && payload['role'] === 'user') {
-    return textFromCodexContent(payload['content'])
-  }
-  return null
-}
-
 function cwdFromCodexEntry(entry: unknown): string | null {
   if (!isPlainObject(entry)) return null
   const payload = entry['payload']
@@ -355,7 +329,7 @@ function readCodexHeader(path: string): {
     }
     if (createdAt === null && isPlainObject(parsed)) createdAt = stringProp(parsed, 'timestamp')
     cwd = cwd ?? cwdFromCodexEntry(parsed)
-    firstPrompt = firstPrompt ?? promptFromCodexEntry(parsed)
+    firstPrompt = firstPrompt ?? codexHistoryPromptFromEntry(parsed)
     if (cwd !== null && firstPrompt !== null && createdAt !== null) break
   }
   return { cwd, firstPrompt, createdAt, createdAtMs: parseTimeMs(createdAt) }

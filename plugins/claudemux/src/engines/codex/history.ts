@@ -26,6 +26,7 @@ import {
   readCodexRolloutSnapshot,
   type CodexRolloutFile,
 } from './rollout.js'
+import { codexHistoryPromptFromEntry } from './history-prompt.js'
 
 interface CodexHistoryEntry {
   readonly threadId: string
@@ -91,34 +92,6 @@ function indent(text: string): string {
     .join('\n')
 }
 
-function textFromContent(content: unknown): string | null {
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return null
-  const parts: string[] = []
-  for (const item of content) {
-    if (!isPlainObject(item)) continue
-    const type = item['type']
-    if (type !== 'input_text' && type !== 'output_text' && type !== 'text') continue
-    const text = stringProp(item, 'text')
-    if (text !== null) parts.push(text)
-  }
-  return parts.length === 0 ? null : parts.join(' ')
-}
-
-function promptFromEntry(entry: unknown): string | null {
-  if (!isPlainObject(entry)) return null
-  const payload = entry['payload']
-  if (!isPlainObject(payload)) return null
-
-  if (payload['type'] === 'user_message' || payload['type'] === 'userMessage') {
-    return stringProp(payload, 'message') ?? stringProp(payload, 'text')
-  }
-  if (entry['type'] === 'response_item' && payload['type'] === 'message' && payload['role'] === 'user') {
-    return textFromContent(payload['content'])
-  }
-  return null
-}
-
 function cwdFromEntry(entry: unknown): string | null {
   if (!isPlainObject(entry)) return null
   const payload = entry['payload']
@@ -176,8 +149,7 @@ function readHistoryEntry(file: CodexRolloutFile): CodexHistoryEntry | null {
   }
 
   let cwd: string | null = null
-  let firstUserEventPrompt: string | null = null
-  let firstUserRolePrompt: string | null = null
+  let firstPrompt: string | null = null
   for (const line of content.split('\n')) {
     if (line.trim() === '') continue
     let entry: unknown
@@ -187,14 +159,7 @@ function readHistoryEntry(file: CodexRolloutFile): CodexHistoryEntry | null {
       continue
     }
     cwd = cwd ?? cwdFromEntry(entry)
-    const prompt = promptFromEntry(entry)
-    if (prompt !== null) {
-      if (isPlainObject(entry) && entry['type'] === 'event_msg') {
-        firstUserEventPrompt = firstUserEventPrompt ?? prompt
-      } else {
-        firstUserRolePrompt = firstUserRolePrompt ?? prompt
-      }
-    }
+    firstPrompt = firstPrompt ?? codexHistoryPromptFromEntry(entry)
   }
 
   if (cwd === null) return null
@@ -212,7 +177,7 @@ function readHistoryEntry(file: CodexRolloutFile): CodexHistoryEntry | null {
     size,
     lineCount: content.match(/\n/g)?.length ?? 0,
     cwd,
-    firstPrompt: firstUserEventPrompt ?? firstUserRolePrompt,
+    firstPrompt,
   }
 }
 
