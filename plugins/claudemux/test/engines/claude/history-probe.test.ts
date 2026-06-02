@@ -7,7 +7,7 @@
  * — that disagreement would silently bias the ambiguity decision.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
@@ -21,7 +21,7 @@ let projectDir: string
 
 beforeEach(() => {
   projectsDir = mkdtempSync('/tmp/cmx-claude-probe-')
-  cwd = mkdtempSync('/tmp/cmx-claude-cwd-')
+  cwd = realpathSync(mkdtempSync('/tmp/cmx-claude-cwd-'))
   projectDir = join(projectsDir, encodeProjectDir(cwd))
 })
 

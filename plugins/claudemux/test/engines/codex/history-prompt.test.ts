@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 
@@ -21,7 +21,7 @@ let projectsDir: string
 let savedSessionsRoot: string | undefined
 
 beforeEach(() => {
-  scratch = mkdtempSync('/tmp/cmx-codex-history-prompt-')
+  scratch = realpathSync(mkdtempSync('/tmp/cmx-codex-history-prompt-'))
   repo = join(scratch, 'example-repo')
   sessionsRoot = join(scratch, 'sessions')
   projectsDir = join(scratch, 'claude-projects')
@@ -127,7 +127,7 @@ function responseItemRolloutLines(
 }
 
 function writeClaudeTranscript(sid: string, prompt: string, assistant: string, mtimeIso = '2026-05-24T00:00:06.000Z'): string {
-  const dir = join(projectsDir, encodeProjectDir(repo))
+  const dir = join(projectsDir, encodeProjectDir(realpathSync(repo)))
   mkdirSync(dir, { recursive: true })
   const path = join(dir, `${sid}.jsonl`)
   writeFileSync(path, [
