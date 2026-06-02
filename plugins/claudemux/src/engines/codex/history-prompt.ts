@@ -26,6 +26,8 @@ function firstNonEmptyLine(text: string): string {
 }
 
 function isAgentsInstructionsPrompt(text: string): boolean {
+  // Codex writes the bootstrap AGENTS instructions as the only synthetic
+  // user message before the first real prompt in current rollout history.
   return firstNonEmptyLine(text).startsWith('# AGENTS.md instructions for ')
 }
 

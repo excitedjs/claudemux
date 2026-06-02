@@ -37,7 +37,7 @@ function writeRollout(threadId: string, lines: readonly unknown[]): string {
   mkdirSync(dir, { recursive: true })
   const path = join(dir, `rollout-2026-05-24T00-00-00-${threadId}.jsonl`)
   writeFileSync(path, `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`)
-  const mtime = new Date('2026-05-24T00:00:04.000Z')
+  const mtime = new Date('2026-05-24T00:00:05.000Z')
   utimesSync(path, mtime, mtime)
   return path
 }
@@ -60,11 +60,20 @@ function rolloutLines(prompt: string): readonly unknown[] {
     },
     {
       timestamp: '2026-05-24T00:00:02.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: prompt }],
+      },
+    },
+    {
+      timestamp: '2026-05-24T00:00:03.000Z',
       type: 'event_msg',
       payload: { type: 'user_message', message: prompt },
     },
     {
-      timestamp: '2026-05-24T00:00:03.000Z',
+      timestamp: '2026-05-24T00:00:04.000Z',
       type: 'event_msg',
       payload: {
         type: 'agent_message',
