@@ -1,5 +1,11 @@
 # claudemux
 
+## 3.0.0-beta.1
+
+### Major Changes
+
+- 794ecfa: Replace the Claude engine's tmux `send-keys` / `capture-pane` bridge with a stream-json stdio broker transport (issue #49). Each Claude teammate is now a persistent `claude -p --input-format stream-json` child held by a detached per-teammate broker that `tm` reaches over a unix socket — turn lifecycle, reply text, token usage, cost, and stop reason come from the structured `result` envelope instead of being scraped from a rendered terminal pane. The broker writes the `/tmp` turn signal the fleet verbs read, so the hook-driven signal is no longer the Claude transport's source of truth. Remote Control is supported by the broker sending a `remote_control` control request and surfacing the returned session URL. Permission posture is `--dangerously-skip-permissions` (unattended teammate, matching the Codex `Never` posture). The tmux bridge modules are removed: this is a clean transport switch, not a dual-path. Breaking: a Claude teammate no longer has an attachable tmux pane; live human observability is via `tm last` / `tm states` / `tm status` until a stream viewer lands.
+
 ## 2.1.2
 
 ### Patch Changes
