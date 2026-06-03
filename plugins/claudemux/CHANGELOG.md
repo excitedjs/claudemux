@@ -1,5 +1,11 @@
 # claudemux
 
+## 3.0.0-beta.3
+
+### Patch Changes
+
+- dc6cbc2: Keep stream-json Claude teammates from inheriting dispatcher channel launch environment while preserving Remote Control startup.
+
 ## 3.0.0-beta.2
 
 ### Patch Changes

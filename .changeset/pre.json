@@ -7,6 +7,7 @@
   },
   "changesets": [
     "claude-stream-json-transport",
+    "quiet-channel-env",
     "release-publish-dist-tag"
   ]
 }
