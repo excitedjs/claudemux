@@ -1,5 +1,11 @@
 # claudemux
 
+## 3.0.0-beta.4
+
+### Patch Changes
+
+- f452af9: Print Claude stream-json status snapshots even before the first turn and surface Remote Control URLs in spawn/status output.
+
 ## 3.0.0-beta.3
 
 ### Patch Changes

@@ -6,6 +6,7 @@
     "claude-channel-feishu": "0.4.2"
   },
   "changesets": [
+    "bright-status-remote-control",
     "claude-stream-json-transport",
     "quiet-channel-env",
     "release-publish-dist-tag"
