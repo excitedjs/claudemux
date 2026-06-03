@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 
 import { startDaemonServer, type DaemonServer } from '../src/daemon-server'
-import { installDoctorBootstrap, startProxy, type ProxyHandle, type ProxyMcpServer } from '../src/proxy'
+import { installDoctorBootstrap, startProxy, startProxySession, type ProxyHandle, type ProxyMcpServer } from '../src/proxy'
 import {
   CHANNEL_TOOLS,
   channelNotification,
@@ -187,6 +187,11 @@ describe('thin proxy MCP wiring', () => {
 })
 
 describe('connectProxyOrSpawnDaemon', () => {
+  // Spawning a daemon when the socket is missing is the proxy's NORMAL delivery
+  // startup behavior (a session needs a daemon), not the doctor path: the doctor
+  // tool is handled locally and never reaches here. The no-spawn, no-disturbance
+  // diagnosis of a daemon-missing scene is the CLI `npm run doctor`, which does
+  // not register a proxy at all.
   test('spawns the daemon once, then retries the proxy connection until it succeeds', async () => {
     const mcp = fakeMcp()
     const handle = {
@@ -497,5 +502,55 @@ describe('installDoctorBootstrap — doctor reachable before/without a daemon', 
     })) as { isError?: boolean; content: Array<{ text: string }> }
     expect(result.isError).toBe(true)
     expect(result.content[0]?.text).toMatch(/connecting/i)
+  })
+})
+
+describe('startProxySession — the runProxyMain ordering contract', () => {
+  test('exposes the doctor (bootstrap + stdio) BEFORE the daemon attach, which runs in the background', async () => {
+    const order: string[] = []
+    let resolveAttach!: (h: ProxyHandle) => void
+    const attachPromise = new Promise<ProxyHandle>((r) => {
+      resolveAttach = r
+    })
+    const onAttached = vi.fn()
+
+    await startProxySession({
+      installBootstrap: () => order.push('bootstrap'),
+      connectStdio: async () => {
+        order.push('stdio')
+      },
+      attach: () => {
+        order.push('attach-started')
+        return attachPromise
+      },
+      onAttached,
+      onAttachError: vi.fn(),
+    })
+
+    // startProxySession resolves once stdio is up — it does NOT await the attach.
+    expect(order).toEqual(['bootstrap', 'stdio', 'attach-started'])
+    expect(onAttached).not.toHaveBeenCalled()
+
+    const handle = { close: vi.fn() } as unknown as ProxyHandle
+    resolveAttach(handle)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(onAttached).toHaveBeenCalledWith(handle)
+  })
+
+  test('a daemon attach failure does not fail the session — the doctor surface stays up', async () => {
+    const onAttachError = vi.fn()
+    await expect(
+      startProxySession({
+        installBootstrap: vi.fn(),
+        connectStdio: async () => {},
+        attach: () => Promise.reject(new Error('daemon missing')),
+        onAttached: vi.fn(),
+        onAttachError,
+      }),
+    ).resolves.toBeUndefined()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(onAttachError).toHaveBeenCalledWith(expect.any(Error))
   })
 })

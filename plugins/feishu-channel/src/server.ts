@@ -39,7 +39,7 @@ import { startDaemon } from './daemon'
 import type { DaemonLockRecord } from './daemon-lock'
 import { collectDiagnosis } from './doctor'
 import { defaultDoctorDeps } from './doctor-probes'
-import { installDoctorBootstrap, startProxy, type ProxyHandle } from './proxy'
+import { installDoctorBootstrap, startProxy, startProxySession, type ProxyHandle } from './proxy'
 import {
   accessFile,
   daemonInboundQueueFile,
@@ -765,30 +765,29 @@ async function runProxyMain(): Promise<void> {
   const server = createMcpServer()
   const runDoctor = proxyDoctorRunner(serverVersion(), stableProxySessionId(proxyRole()), base)
 
-  // Expose the tool surface and connect stdio BEFORE attaching to the daemon, so
-  // feishu_channel_doctor is reachable even when the daemon is unreachable — and
-  // running the doctor spawns no daemon (it is handled locally). The full
-  // forwarding surface replaces these handlers once the proxy attaches.
-  installDoctorBootstrap(server as unknown as ConnectProxyDeps['mcpServer'], runDoctor)
   shutdown.register('mcp-server', () => server.close())
   shutdown.watch(server)
   // Backstop for a parent that goes away without closing the MCP stdio.
   // The proxy holds no Feishu connection, but an orphan proxy would keep a
   // dead session registered with the daemon until the socket eventually closes.
   shutdown.watchParent()
-  await server.connect(new StdioServerTransport())
 
-  // Attach to (or spawn) the daemon for normal delivery in the background. A
-  // failure here leaves the bootstrap surface — including the doctor — in place
-  // rather than failing the whole session.
-  void connectProxyOrSpawnDaemon({
-    socketPath,
-    mcpServer: server as unknown as ConnectProxyDeps['mcpServer'],
-    baseDir: base,
-    runDoctorFn: runDoctor,
+  // Expose the doctor + connect stdio first, then attach the daemon in the
+  // background (the normal delivery path, which may spawn a daemon). The doctor
+  // is reachable the instant stdio is up; an attach failure leaves it in place.
+  await startProxySession({
+    installBootstrap: () => installDoctorBootstrap(server as unknown as ConnectProxyDeps['mcpServer'], runDoctor),
+    connectStdio: () => server.connect(new StdioServerTransport()),
+    attach: () =>
+      connectProxyOrSpawnDaemon({
+        socketPath,
+        mcpServer: server as unknown as ConnectProxyDeps['mcpServer'],
+        baseDir: base,
+        runDoctorFn: runDoctor,
+      }),
+    onAttached: (proxy) => shutdown.register('feishu-proxy', () => proxy.close()),
+    onAttachError: (err) => defaultLogError('Feishu proxy failed to attach; doctor remains available', err),
   })
-    .then((proxy) => shutdown.register('feishu-proxy', () => proxy.close()))
-    .catch((err) => defaultLogError('Feishu proxy failed to attach; doctor remains available', err))
 }
 
 interface ConnectProxyDeps {

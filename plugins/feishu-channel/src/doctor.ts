@@ -32,7 +32,7 @@ export const DOCTOR_TOOL_NAME = 'feishu_channel_doctor'
 export const DOCTOR_TOOL: Tool = {
   name: DOCTOR_TOOL_NAME,
   description:
-    'Diagnose the Feishu channel runtime in one pass: daemon/proxy version skew, a stale server holding the inbound lock, multiple daemons contending for the socket, channel ownership stolen by a teammate, and the broker handoff gap. Returns a ranked report of checks, each with severity, detail, and a remediation hint. Read-only; takes no required arguments.',
+    'Diagnose the Feishu channel runtime in one pass: daemon/proxy version skew, a stale server holding the inbound lock, multiple daemons contending for the socket, channel ownership stolen by a teammate, and the broker handoff gap. Returns a ranked report of checks, each with severity, detail, and a remediation hint. Read-only; takes no required arguments. Runs inside the live session whose proxy, on startup, connects to (and may spawn) the daemon as normal — so to inspect a daemon-missing or stale-socket scene without disturbing it, run the CLI instead: `npm run doctor` in the plugin dir registers no proxy and spawns nothing.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -196,7 +196,7 @@ interface Evidence {
 
 const LIMITATIONS = [
   'Scoped to one FEISHU_CHANNEL_STATE_DIR; a daemon launched under a different state dir has its own socket and connection.lock and is invisible to this run.',
-  'The diagnosis is only as new as the code running it. A resumed session keeps its original proxy, so the MCP tool can carry stale logic — run the CLI (npm run doctor) from the pinned install for a current, daemon-independent diagnosis.',
+  'The MCP tool runs inside a live session, whose proxy connects to (and may spawn) the daemon as normal startup behavior — so it cannot observe a daemon-missing or stale-socket scene without disturbing it. The diagnosis is also only as new as that proxy, which a resumed session keeps from when it started. For a current, daemon-independent, no-spawn diagnosis (and to inspect daemon-missing / stale-socket as found), run the CLI: `npm run doctor` from the pinned install registers no proxy and spawns nothing.',
   'broker-owner-handoff-gap relies on the launcher injecting CLAUDEMUX_CHANNEL_TRANSPORT so the proxy can self-report metadata.transport. When that env is absent (a teammate the spawner did not tag), the check degrades to an annotation rather than a positive detection.',
 ]
 
@@ -528,7 +528,7 @@ function checkDaemonSingleton(ev: Evidence): DoctorCheck {
   }
   if (daemons.length > 1) {
     return mk(id, title, 'error', {
-      detail: `Found ${daemons.length} daemon processes (pids ${daemons.map((d) => d.pid).join(', ')}); only one can bind the socket, the rest should have stood down. Competing daemons cause inbound double-consumption.`,
+      detail: `Found ${daemons.length} daemon processes (pids ${daemons.map((d) => d.pid).join(', ')}); only one can bind the socket, the rest should have stood down. Extra daemon processes are an abnormal lifecycle state — leftover processes still holding the inbound lock or a Feishu connection — and should be cleared.`,
       remediation: 'Stop the extra daemon process(es); keep the one whose pid equals the socket listener.',
       evidence: { daemon_pids: daemons.map((d) => d.pid), listener_pid: listener ?? null },
     })

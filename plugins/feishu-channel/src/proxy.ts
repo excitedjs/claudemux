@@ -38,6 +38,41 @@ export function proxyTools(includeDoctor: boolean): Tool[] {
   return [...CHANNEL_TOOLS, ...CHANNEL_OWNER_TOOLS, ...(includeDoctor ? [DOCTOR_TOOL] : [])]
 }
 
+/** The lifecycle steps of a proxy session, injected so the ordering is testable. */
+export interface ProxySessionDeps {
+  /** Install the bootstrap tool surface (exposes the local doctor immediately). */
+  installBootstrap: () => void
+  /** Connect the MCP stdio transport. */
+  connectStdio: () => Promise<void>
+  /**
+   * Attach to (or spawn) the daemon for normal delivery. This is the proxy's
+   * standard startup behavior and spawns a daemon when one is missing — product
+   * behavior, independent of the local, spawn-free doctor handler.
+   */
+  attach: () => Promise<ProxyHandle>
+  /** Called once the daemon attach succeeds (e.g. to register cleanup). */
+  onAttached: (proxy: ProxyHandle) => void
+  /** Called when the daemon attach fails; the session stays up on the bootstrap surface. */
+  onAttachError: (err: unknown) => void
+}
+
+/**
+ * Run a proxy session in the order that keeps `feishu_channel_doctor` reachable:
+ * install the bootstrap tool surface and connect stdio FIRST, then attach to the
+ * daemon in the BACKGROUND. The doctor (handled locally in the bootstrap) is thus
+ * callable the instant stdio is up — even if the daemon never attaches — and the
+ * attach failing does not fail the session. The attach itself is the normal
+ * delivery path and may spawn a daemon; that is intended proxy behavior, not the
+ * doctor's doing. (For a no-spawn, no-disturbance diagnosis of a daemon-missing
+ * or stale-socket scene, the `npm run doctor` CLI is the entry — it registers no
+ * proxy.)
+ */
+export async function startProxySession(deps: ProxySessionDeps): Promise<void> {
+  deps.installBootstrap()
+  await deps.connectStdio()
+  void deps.attach().then(deps.onAttached).catch(deps.onAttachError)
+}
+
 /**
  * Expose the tool surface BEFORE a daemon connection exists, so
  * `feishu_channel_doctor` is reachable even when the daemon is unreachable —
