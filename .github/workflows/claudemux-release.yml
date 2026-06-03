@@ -171,6 +171,18 @@ jobs:
         run: |
           name=$(jq -r .name package.json)
           version=$(jq -r .version package.json)
+          # npm dist-tag. A prerelease version `X.Y.Z-<channel>.<n>` MUST publish
+          # under a dist-tag — npm refuses a tagless prerelease publish — and it
+          # must be the channel tag, not `latest`, so a beta never displaces the
+          # stable release. A stable version has no `-`, so the tag is empty and
+          # npm uses its default `latest`. Derived from the version itself, so
+          # main (no pre.json) can never accidentally carry a prerelease tag.
+          prerelease="${version#*-}"
+          if [ "$prerelease" = "$version" ]; then
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${prerelease%%.*}" >> "$GITHUB_OUTPUT"
+          fi
           # Idempotency net: publish only a version npm does not already carry,
           # so a release run whose version is already on npm (e.g. a one-time
           # version reconciliation) does not attempt to republish and fail.
@@ -210,4 +222,14 @@ jobs:
         # authenticates via the GitHub Actions OIDC environment for trusted
         # publishing. The package must be configured as a trusted publisher on
         # npmjs.com (repo=excitedjs/claudemux, workflow=claudemux-release.yml).
-        run: npm publish --provenance --access public --registry=https://registry.npmjs.org
+        #
+        # A prerelease version publishes under its channel dist-tag (`--tag
+        # beta`); a stable version publishes tagless so npm applies `latest`.
+        env:
+          DIST_TAG: ${{ steps.guard.outputs.tag }}
+        run: |
+          if [ -n "$DIST_TAG" ]; then
+            npm publish --provenance --access public --registry=https://registry.npmjs.org --tag "$DIST_TAG"
+          else
+            npm publish --provenance --access public --registry=https://registry.npmjs.org
+          fi
