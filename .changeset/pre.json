@@ -6,6 +6,7 @@
     "claude-channel-feishu": "0.4.2"
   },
   "changesets": [
-    "claude-stream-json-transport"
+    "claude-stream-json-transport",
+    "release-publish-dist-tag"
   ]
 }
