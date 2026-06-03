@@ -16,8 +16,29 @@
  */
 
 import { createInterface } from 'node:readline'
+import { writeFileSync } from 'node:fs'
 
 const SESSION_ID = process.env.FAKE_CLAUDE_SESSION_ID || '11111111-2222-3333-4444-555555555555'
+
+if (process.env.FAKE_CLAUDE_CAPTURE_FILE) {
+  const captureKeys = (process.env.FAKE_CLAUDE_CAPTURE_ENV_KEYS || '')
+    .split(',')
+    .map((key) => key.trim())
+    .filter((key) => key.length > 0)
+  const shouldCapture = captureKeys.length > 0
+    ? (key) => captureKeys.includes(key)
+    : (key) => /CHANNEL|CLAUDEMUX_TEAMMATE_NAME/.test(key)
+  writeFileSync(
+    process.env.FAKE_CLAUDE_CAPTURE_FILE,
+    `${JSON.stringify({
+      argv: process.argv.slice(2),
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(([key]) => shouldCapture(key)),
+      ),
+    })}\n`,
+    'utf8',
+  )
+}
 
 function emit(obj) {
   process.stdout.write(`${JSON.stringify(obj)}\n`)

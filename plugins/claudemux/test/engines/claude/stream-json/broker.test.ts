@@ -1,13 +1,15 @@
-import { chmodSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
 
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import { brokerMain } from '../../../../src/engines/claude/stream-json/broker'
 import { brokerRequest } from '../../../../src/engines/claude/stream-json/client'
 import { brokerAlive, removeBrokerDir } from '../../../../src/engines/claude/stream-json/registry'
-import type { BrokerSpawnParams } from '../../../../src/engines/claude/stream-json/launch'
+import { buildClaudeEnv, type BrokerSpawnParams } from '../../../../src/engines/claude/stream-json/launch'
+import { proxyRole } from '../../../../../feishu-channel/src/proxy-role'
 
 /**
  * Drives the real broker loop (`brokerMain`) in-process against the fake
@@ -45,6 +47,25 @@ async function waitReady(name: string): Promise<void> {
     await new Promise((r) => setTimeout(r, 25))
   }
   throw new Error('broker did not become ready')
+}
+
+async function waitForFile(path: string): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    if (existsSync(path)) return
+    await new Promise((r) => setTimeout(r, 25))
+  }
+  throw new Error(`file did not appear: ${path}`)
+}
+
+async function waitRemoteControlUrl(name: string): Promise<string> {
+  for (let i = 0; i < 200; i++) {
+    const status = await brokerRequest(name, { op: 'status' })
+    if (status.ok && status.kind === 'status' && status.status.remoteControlUrl !== null) {
+      return status.status.remoteControlUrl
+    }
+    await new Promise((r) => setTimeout(r, 25))
+  }
+  throw new Error('remote control URL did not appear')
 }
 
 let running: { name: string; promise: Promise<number> } | null = null
@@ -154,10 +175,118 @@ describe('stream-json broker end-to-end', () => {
     const promise = brokerMain(p)
     running = { name, promise }
     await waitReady(name)
-    // The RC enable is fire-and-forget after init; give the fixture a tick to
-    // answer the control request, then read it off status.
-    await new Promise((r) => setTimeout(r, 100))
-    const status = await brokerRequest(name, { op: 'status' })
-    expect(status.ok && status.kind === 'status' && status.status.remoteControlUrl).toBe('https://example.invalid/session/fake')
+    expect(await waitRemoteControlUrl(name)).toBe('https://example.invalid/session/fake')
+  })
+
+  it('launches the teammate claude child without inherited channel argv or env', async () => {
+    const name = uniqueName()
+    const dir = mkdtempSync(join(tmpdir(), 'claudemux-fake-claude-'))
+    const capture = join(dir, 'capture.json')
+    const stateDir = join(dir, 'feishu-state')
+    const captureKeys = [
+      'CLAUDEMUX_TEAMMATE_NAME',
+      'CLAUDEMUX_TEST_KEEP_ENV',
+      'POWERSHELL_DISTRIBUTION_CHANNEL',
+      'FEISHU_CHANNEL_PROXY_ROLE',
+      'FEISHU_CHANNEL_DISPATCHER',
+      'FEISHU_CHANNEL_SESSION_ID',
+      'FEISHU_CHANNEL_STATE_DIR',
+      'CLAUDE_CHANNELS',
+      'CLAUDE_CODE_CHANNELS',
+    ]
+    const previous = {
+      fakeCapture: process.env['FAKE_CLAUDE_CAPTURE_FILE'],
+      fakeCaptureKeys: process.env['FAKE_CLAUDE_CAPTURE_ENV_KEYS'],
+      feishuDispatcher: process.env['FEISHU_CHANNEL_DISPATCHER'],
+      feishuRole: process.env['FEISHU_CHANNEL_PROXY_ROLE'],
+      feishuSessionId: process.env['FEISHU_CHANNEL_SESSION_ID'],
+      feishuStateDir: process.env['FEISHU_CHANNEL_STATE_DIR'],
+      claudeChannels: process.env['CLAUDE_CHANNELS'],
+      claudeCodeChannels: process.env['CLAUDE_CODE_CHANNELS'],
+      powershellChannel: process.env['POWERSHELL_DISTRIBUTION_CHANNEL'],
+      keep: process.env['CLAUDEMUX_TEST_KEEP_ENV'],
+    }
+    process.env['FAKE_CLAUDE_CAPTURE_FILE'] = capture
+    process.env['FAKE_CLAUDE_CAPTURE_ENV_KEYS'] = captureKeys.join(',')
+    process.env['FEISHU_CHANNEL_DISPATCHER'] = '1'
+    process.env['FEISHU_CHANNEL_PROXY_ROLE'] = 'dispatcher'
+    process.env['FEISHU_CHANNEL_SESSION_ID'] = 'dispatcher-session'
+    process.env['FEISHU_CHANNEL_STATE_DIR'] = stateDir
+    process.env['CLAUDE_CHANNELS'] = 'plugin:feishu-channel@example'
+    process.env['CLAUDE_CODE_CHANNELS'] = 'plugin:feishu-channel@example'
+    process.env['POWERSHELL_DISTRIBUTION_CHANNEL'] = 'GitHubActions'
+    process.env['CLAUDEMUX_TEST_KEEP_ENV'] = 'keep'
+    try {
+      const promise = brokerMain({ ...paramsFor(name), remoteControl: true })
+      running = { name, promise }
+      await waitReady(name)
+      await waitForFile(capture)
+
+      const launched = JSON.parse(readFileSync(capture, 'utf8')) as {
+        argv: string[]
+        env: Record<string, string>
+      }
+      expect(launched.argv).not.toContain('--channels')
+      expect(launched.env['CLAUDEMUX_TEAMMATE_NAME']).toBe(name)
+      expect(launched.env['CLAUDEMUX_TEST_KEEP_ENV']).toBe('keep')
+      expect(launched.env['POWERSHELL_DISTRIBUTION_CHANNEL']).toBe('GitHubActions')
+      expect(launched.env['FEISHU_CHANNEL_STATE_DIR']).toBe(stateDir)
+      expect(launched.env['FEISHU_CHANNEL_PROXY_ROLE']).toBeUndefined()
+      expect(launched.env['FEISHU_CHANNEL_DISPATCHER']).toBeUndefined()
+      expect(launched.env['FEISHU_CHANNEL_SESSION_ID']).toBeUndefined()
+      expect(launched.env['CLAUDE_CHANNELS']).toBeUndefined()
+      expect(launched.env['CLAUDE_CODE_CHANNELS']).toBeUndefined()
+      expect(proxyRole(launched.env)).toBe('session')
+
+      expect(await waitRemoteControlUrl(name)).toBe('https://example.invalid/session/fake')
+    } finally {
+      if (previous.fakeCapture === undefined) delete process.env['FAKE_CLAUDE_CAPTURE_FILE']
+      else process.env['FAKE_CLAUDE_CAPTURE_FILE'] = previous.fakeCapture
+      if (previous.fakeCaptureKeys === undefined) delete process.env['FAKE_CLAUDE_CAPTURE_ENV_KEYS']
+      else process.env['FAKE_CLAUDE_CAPTURE_ENV_KEYS'] = previous.fakeCaptureKeys
+      if (previous.feishuDispatcher === undefined) delete process.env['FEISHU_CHANNEL_DISPATCHER']
+      else process.env['FEISHU_CHANNEL_DISPATCHER'] = previous.feishuDispatcher
+      if (previous.feishuRole === undefined) delete process.env['FEISHU_CHANNEL_PROXY_ROLE']
+      else process.env['FEISHU_CHANNEL_PROXY_ROLE'] = previous.feishuRole
+      if (previous.feishuSessionId === undefined) delete process.env['FEISHU_CHANNEL_SESSION_ID']
+      else process.env['FEISHU_CHANNEL_SESSION_ID'] = previous.feishuSessionId
+      if (previous.feishuStateDir === undefined) delete process.env['FEISHU_CHANNEL_STATE_DIR']
+      else process.env['FEISHU_CHANNEL_STATE_DIR'] = previous.feishuStateDir
+      if (previous.claudeChannels === undefined) delete process.env['CLAUDE_CHANNELS']
+      else process.env['CLAUDE_CHANNELS'] = previous.claudeChannels
+      if (previous.claudeCodeChannels === undefined) delete process.env['CLAUDE_CODE_CHANNELS']
+      else process.env['CLAUDE_CODE_CHANNELS'] = previous.claudeCodeChannels
+      if (previous.powershellChannel === undefined) delete process.env['POWERSHELL_DISTRIBUTION_CHANNEL']
+      else process.env['POWERSHELL_DISTRIBUTION_CHANNEL'] = previous.powershellChannel
+      if (previous.keep === undefined) delete process.env['CLAUDEMUX_TEST_KEEP_ENV']
+      else process.env['CLAUDEMUX_TEST_KEEP_ENV'] = previous.keep
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('builds teammate env from a controlled parent env', () => {
+    const stripped = buildClaudeEnv({
+      FEISHU_CHANNEL_PROXY_ROLE: 'dispatcher',
+      FEISHU_CHANNEL_DISPATCHER: '1',
+      FEISHU_CHANNEL_SESSION_ID: 'dispatcher-session',
+      FEISHU_CHANNEL_STATE_DIR: '/tmp/example-feishu-state',
+      CLAUDE_CHANNELS: 'plugin:feishu-channel@example',
+      CLAUDE_CODE_CHANNELS: 'plugin:feishu-channel@example',
+      POWERSHELL_DISTRIBUTION_CHANNEL: 'GitHubActions',
+      PATH: '/bin',
+      HOME: '/tmp/home',
+      ORDINARY_ENV: 'kept',
+    }, 'alpha')
+
+    expect(stripped['CLAUDEMUX_TEAMMATE_NAME']).toBe('alpha')
+    expect(stripped['FEISHU_CHANNEL_PROXY_ROLE']).toBeUndefined()
+    expect(stripped['FEISHU_CHANNEL_DISPATCHER']).toBeUndefined()
+    expect(stripped['FEISHU_CHANNEL_SESSION_ID']).toBeUndefined()
+    expect(stripped['CLAUDE_CHANNELS']).toBeUndefined()
+    expect(stripped['CLAUDE_CODE_CHANNELS']).toBeUndefined()
+    expect(stripped['FEISHU_CHANNEL_STATE_DIR']).toBe('/tmp/example-feishu-state')
+    expect(stripped['POWERSHELL_DISTRIBUTION_CHANNEL']).toBe('GitHubActions')
+    expect(stripped['ORDINARY_ENV']).toBe('kept')
+    expect(proxyRole(stripped)).toBe('session')
   })
 })
