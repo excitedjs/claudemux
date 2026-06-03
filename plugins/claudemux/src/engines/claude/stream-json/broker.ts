@@ -39,7 +39,7 @@ import {
   type ParsedLine,
   type TurnOutcome,
 } from './protocol'
-import { buildClaudeArgs, claudeBinary, type BrokerSpawnParams } from './launch'
+import { buildClaudeArgs, buildClaudeEnv, claudeBinary, type BrokerSpawnParams } from './launch'
 import { ensureBrokerDir, writeBrokerPid, writeMeta, type BrokerMeta } from './registry'
 import {
   busyMarkerFor,
@@ -158,7 +158,7 @@ class Broker {
       child = spawn(bin, args, {
         cwd: this.params.cwd,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, CLAUDEMUX_TEAMMATE_NAME: this.params.name },
+        env: buildClaudeEnv(process.env, this.params.name),
       })
     } catch (err) {
       return `failed to spawn ${bin}: ${err instanceof Error ? err.message : String(err)}`

@@ -38,6 +38,7 @@ import { generatePairingCode } from '@excitedjs/feishu-transport'
 import { startDaemon } from './daemon'
 import type { DaemonLockRecord } from './daemon-lock'
 import { startProxy, type ProxyHandle } from './proxy'
+import { proxyRole } from './proxy-role'
 import {
   accessFile,
   daemonInboundQueueFile,
@@ -856,13 +857,6 @@ function npmCommand(): string {
 
 function pluginRoot(): string {
   return dirname(dirname(fileURLToPath(import.meta.url)))
-}
-
-function proxyRole(): 'dispatcher' | 'session' {
-  return process.env.FEISHU_CHANNEL_PROXY_ROLE === 'dispatcher' ||
-    process.env.FEISHU_CHANNEL_DISPATCHER === '1'
-    ? 'dispatcher'
-    : 'session'
 }
 
 export function stableProxySessionId(

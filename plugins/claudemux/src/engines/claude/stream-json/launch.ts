@@ -78,6 +78,35 @@ export function buildClaudeArgs(opts: ClaudeArgsOptions): string[] {
   return args
 }
 
+function isChannelEnvKey(key: string): boolean {
+  const upper = key.toUpperCase()
+  return upper === 'FEISHU_CHANNEL_PROXY_ROLE' ||
+    upper === 'FEISHU_CHANNEL_DISPATCHER' ||
+    upper === 'FEISHU_CHANNEL_SESSION_ID' ||
+    (upper.startsWith('CLAUDE') && upper.includes('CHANNEL')) ||
+    upper === 'CHANNEL' ||
+    upper === 'CHANNELS'
+}
+
+/**
+ * Build the environment for the teammate's `claude -p` child.
+ *
+ * A dispatcher may itself run with Claude channels enabled. Stream-json
+ * teammates must not inherit that channel launch configuration: Remote Control
+ * is enabled through a stdin `remote_control` control request, while channels
+ * are separate inbound transports that would start a proxy for the teammate and
+ * can steal singleton channel ownership from the dispatcher.
+ */
+export function buildClaudeEnv(parentEnv: NodeJS.ProcessEnv, teammateName: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {}
+  for (const [key, value] of Object.entries(parentEnv)) {
+    if (value === undefined || isChannelEnvKey(key)) continue
+    env[key] = value
+  }
+  env['CLAUDEMUX_TEAMMATE_NAME'] = teammateName
+  return env
+}
+
 /** Inputs the detached broker needs, passed as its argv. */
 export interface BrokerSpawnParams {
   readonly name: string
