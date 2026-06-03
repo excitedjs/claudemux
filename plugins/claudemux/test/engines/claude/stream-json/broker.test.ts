@@ -5,10 +5,12 @@ import { tmpdir } from 'node:os'
 
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 
+import { ClaudeEngine } from '../../../../src/engines/claude/claude-engine'
 import { brokerMain } from '../../../../src/engines/claude/stream-json/broker'
 import { brokerRequest } from '../../../../src/engines/claude/stream-json/client'
 import { brokerAlive, removeBrokerDir } from '../../../../src/engines/claude/stream-json/registry'
 import { buildClaudeEnv, type BrokerSpawnParams } from '../../../../src/engines/claude/stream-json/launch'
+import type { NativeEnv } from '../../../../src/env'
 import { proxyRole } from '../../../../../feishu-channel/src/proxy-role'
 
 /**
@@ -35,6 +37,16 @@ function paramsFor(name: string): BrokerSpawnParams {
     sessionId: null,
     resumeSid: null,
     remoteControl: false,
+  }
+}
+
+function nativeEnv(): NativeEnv {
+  return {
+    dispatcherDir: process.cwd(),
+    projectsDir: '/tmp/sjt-projects',
+    runTmux: async () => ({ code: 1, stdout: '', stderr: '' }),
+    runColumn: async (input) => ({ code: 0, stdout: input, stderr: '' }),
+    runGrep: async () => 1,
   }
 }
 
@@ -288,5 +300,23 @@ describe('stream-json broker end-to-end', () => {
     expect(stripped['POWERSHELL_DISTRIBUTION_CHANNEL']).toBe('GitHubActions')
     expect(stripped['ORDINARY_ENV']).toBe('kept')
     expect(proxyRole(stripped)).toBe('session')
+  })
+
+  it('prints a status snapshot for an idle teammate with no turn yet', async () => {
+    const name = uniqueName()
+    const sessionId = '22222222-3333-4444-5555-666666666666'
+    const promise = brokerMain({ ...paramsFor(name), sessionId })
+    running = { name, promise }
+    await waitReady(name)
+
+    const status = await new ClaudeEngine(nativeEnv()).status({ name, lines: null }, { now: () => 0, env: process.env })
+    expect(status.kind).toBe('present')
+    if (status.kind !== 'present') throw new Error('expected present status')
+    expect(status.pane).toContain(`name: ${name}\n`)
+    expect(status.pane).toContain('engine: claude\n')
+    expect(status.pane).toContain('state: idle\n')
+    expect(status.pane).toContain(`session id: ${sessionId}\n`)
+    expect(status.pane).toContain('model: (unknown)\n')
+    expect(status.pane).toContain('latest reply:\n(no latest reply)\n')
   })
 })
