@@ -61,7 +61,7 @@ import { provisionWorktree, reapWorktree } from '../git-worktree'
 import { spawnBroker, brokerRequest } from './stream-json/client'
 import { brokerAlive, listLiveBrokers, readBrokerPid, readMeta, removeBrokerDir } from './stream-json/registry'
 import type { BrokerSpawnParams } from './stream-json/launch'
-import type { BrokerResponse, WireTurn } from './stream-json/wire'
+import type { BrokerResponse, BrokerStatus, WireTurn } from './stream-json/wire'
 import {
   busyMarkerFor,
   claudeStreamSocket,
@@ -92,9 +92,18 @@ export const CLAUDE_CAPABILITIES: EngineCapabilities = {
 } as const
 
 const NO_TEXT_SENTINEL = '(no text reply this turn — tool-only, /compact, /clear, or fresh spawn)\n'
+// Remote Control normally answers immediately after broker startup; this short
+// cap makes the URL opportunistic so spawn never waits long for a display-only
+// field.
+const RC_URL_WAIT_MS = 2_000
+const RC_URL_POLL_MS = 50
 
 function rstrip(text: string): string {
   return text.replace(/\n+$/, '')
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms))
 }
 
 /** Lookup a teammate's recorded cwd from the broker-written `.cwd` pointer. */
@@ -145,6 +154,74 @@ function usageLine(turn: WireTurn): string {
   if (turn.cacheReadInputTokens !== null) parts.push(`cache=${turn.cacheReadInputTokens}`)
   if (turn.totalCostUsd !== null) parts.push(`cost=$${turn.totalCostUsd.toFixed(4)}`)
   return parts.length > 0 ? `ctx: ${parts.join(' ')}\n` : ''
+}
+
+export function formatClaudeStatusPane(args: {
+  readonly name: string
+  readonly status: BrokerStatus
+  readonly cwd: string
+}): string {
+  const latest = args.status.lastText !== null && args.status.lastText.length > 0
+    ? rstrip(args.status.lastText)
+    : '(no latest reply)'
+  const lines = [
+    `name: ${args.name}`,
+    'engine: claude',
+    `state: ${args.status.state}`,
+    `cwd: ${args.cwd.length > 0 ? args.cwd : '(unknown)'}`,
+    `session id: ${args.status.sessionId ?? '(unknown)'}`,
+    `model: ${args.status.model ?? '(unknown)'}`,
+  ]
+  if (args.status.remoteControlUrl !== null) lines.push(`remote control: ${args.status.remoteControlUrl}`)
+  lines.push('latest reply:', latest)
+  return `${lines.join('\n')}\n`
+}
+
+export function formatClaudeSpawnStdout(name: string, remoteControlUrl: string | null): string {
+  const lines = [`spawned ${name}`]
+  if (remoteControlUrl !== null) lines.push(`remote control: ${remoteControlUrl}`)
+  return `${lines.join('\n')}\n`
+}
+
+export interface RemoteControlUrlWaitDeps {
+  readonly request?: typeof brokerRequest
+  readonly now?: () => number
+  readonly sleep?: (ms: number) => Promise<void>
+  readonly waitMs?: number
+  readonly pollMs?: number
+}
+
+export async function waitForRemoteControlUrl(name: string, deps: RemoteControlUrlWaitDeps = {}): Promise<string | null> {
+  const request = deps.request ?? brokerRequest
+  const now = deps.now ?? Date.now
+  const sleepFn = deps.sleep ?? sleep
+  const waitMs = deps.waitMs ?? RC_URL_WAIT_MS
+  const pollMs = deps.pollMs ?? RC_URL_POLL_MS
+  const deadline = now() + waitMs
+  while (now() < deadline) {
+    const res = await request(name, { op: 'status' })
+    if (res.ok && res.kind === 'status' && res.status.remoteControlUrl !== null) return res.status.remoteControlUrl
+    await sleepFn(pollMs)
+  }
+  return null
+}
+
+export function formatClaudeSpawnTmResult(args: {
+  readonly name: string
+  readonly remoteControlUrl: string | null
+  readonly firstTurnTmResult: TmResult | undefined
+}): TmResult {
+  if (args.firstTurnTmResult !== undefined) {
+    // Keep a first-turn prompt's stream-json stdout pure; the display-only RC
+    // URL goes to stderr so callers can still consume the assistant reply.
+    return args.remoteControlUrl !== null
+      ? {
+          ...args.firstTurnTmResult,
+          stderr: `${args.firstTurnTmResult.stderr}remote control: ${args.remoteControlUrl}\n`,
+        }
+      : args.firstTurnTmResult
+  }
+  return { code: 0, stdout: formatClaudeSpawnStdout(args.name, args.remoteControlUrl), stderr: '' }
 }
 
 /** Map a broker turn response into the engine's `TurnResult`. */
@@ -256,6 +333,7 @@ export class ClaudeEngine implements Engine {
       return { kind: 'failed', message: !res.ok ? res.message : 'unexpected status response' }
     }
     const s = res.status
+    const cwd = readCwd(req.name) ?? readMeta(req.name)?.cwd ?? ''
     const diagnostics: Record<string, string> = {
       sessionId: s.sessionId ?? '',
       model: s.model ?? '',
@@ -267,10 +345,10 @@ export class ClaudeEngine implements Engine {
       name: req.name,
       engine: 'claude',
       state: s.state === 'busy' ? 'busy' : 'idle',
-      cwd: readCwd(req.name) ?? readMeta(req.name)?.cwd ?? '',
-      // No attachable pane in headless stream-json; surface the latest reply
-      // text as the closest observability analogue.
-      pane: s.lastText,
+      cwd,
+      // No attachable pane in headless stream-json; surface a diagnostic
+      // snapshot from the broker instead.
+      pane: formatClaudeStatusPane({ name: req.name, status: s, cwd }),
       diagnostics,
     }
   }
@@ -356,11 +434,13 @@ export class ClaudeEngine implements Engine {
     if (req.prompt !== null) {
       firstTurn = mapTurn(await brokerRequest(req.name, { op: 'send', prompt: req.prompt, timeoutMs: req.timeoutMs }))
     }
-    const spawnStdout = `spawned ${req.name}\n`
+    const remoteControlUrl = req.remoteControl ? await waitForRemoteControlUrl(req.name) : null
+    const firstTurnTmResult = firstTurn?.tmResult
+    const tmResult = formatClaudeSpawnTmResult({ name: req.name, remoteControlUrl, firstTurnTmResult })
     return {
       kind: 'spawned',
       name: req.name,
-      tmResult: firstTurn?.tmResult ?? { code: 0, stdout: spawnStdout, stderr: '' },
+      tmResult,
       firstTurn,
     }
   }
