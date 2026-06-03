@@ -59,6 +59,7 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
     enumerateServers: () => [daemonProc(100)],
     isPidAlive: () => true,
     readStateDirHealth: () => ({ envPresent: true, hasAppId: true, hasAppSecret: true, accessParse: 'ok', queueParse: 'ok' }),
+    socketExists: () => true,
     ...over,
   }
 }
@@ -103,29 +104,46 @@ describe('collectDiagnosis — report shape', () => {
     expect(checks.every((c) => c.severity === 'ok' || c.severity === 'unknown')).toBe(true)
   })
 
-  it('never throws when every probe fails', async () => {
-    const checks = await run({
-      probeHello: async () => {
-        throw new Error('boom')
-      },
-      probeStatus: async () => {
-        throw new Error('boom')
-      },
-      readPinnedInstall: () => {
-        throw new Error('boom')
-      },
-      readConnectionLockHolder: () => {
-        throw new Error('boom')
-      },
-      enumerateServers: () => {
-        throw new Error('boom')
-      },
-      readStateDirHealth: () => {
-        throw new Error('boom')
-      },
-    })
-    expect(sev(checks, 'daemon-reachable')).toBe('error')
-    expect(['unknown', 'ok']).toContain(sev(checks, 'version-skew'))
+  it('never throws when every probe fails — including the per-input probes', async () => {
+    const boom = () => {
+      throw new Error('boom')
+    }
+    const report = await collectDiagnosis(
+      deps({
+        probeHello: async () => {
+          throw new Error('boom')
+        },
+        probeStatus: async () => {
+          throw new Error('boom')
+        },
+        readPinnedInstall: boom,
+        readConnectionLockHolder: boom,
+        enumerateServers: boom,
+        readStateDirHealth: boom,
+        socketExists: boom,
+        // The per-input probes the checks call directly must also be guarded.
+        isPidAlive: boom,
+        readManifestVersionAt: boom,
+      }),
+    )
+    expect(report.checks.length).toBeGreaterThanOrEqual(14)
+    expect(sev(report.checks, 'daemon-reachable')).toBe('error')
+    expect(['unknown', 'ok']).toContain(sev(report.checks, 'version-skew'))
+    expect(['unknown', 'ok']).toContain(sev(report.checks, 'pinned-vs-disk'))
+  })
+})
+
+describe('socket-staleness', () => {
+  it('warn when a socket file exists but no daemon answers', async () => {
+    const checks = await run({ socketExists: () => true, probeHello: async () => null })
+    expect(sev(checks, 'socket-staleness')).toBe('warn')
+  })
+  it('ok when no socket file and no daemon', async () => {
+    const checks = await run({ socketExists: () => false, probeHello: async () => null })
+    expect(sev(checks, 'socket-staleness')).toBe('ok')
+  })
+  it('ok when the socket is live', async () => {
+    expect(sev(await run(), 'socket-staleness')).toBe('ok')
   })
 })
 
@@ -154,6 +172,14 @@ describe('version-skew', () => {
   it('unknown (fail-soft) on an unparseable version, not error', async () => {
     const checks = await run({ readPinnedInstall: () => ({ version: 'dev', installPath: PLUGIN_CACHE }) })
     expect(sev(checks, 'version-skew')).toBe('unknown')
+  })
+  it('warn when the daemon is NEWER than pinned (rollback / reverted pin)', async () => {
+    const checks = await run({
+      probeHello: async () => ({ daemonVersion: '0.8.0', generation: 1, pid: 100 }),
+      probeStatus: async () => healthyStatus({ daemon: { version: '0.8.0', pid: 100, generation: 1, started_at: 1, launch_path: PLUGIN_CACHE } }),
+      readPinnedInstall: () => ({ version: '0.7.0', installPath: PLUGIN_CACHE }),
+    })
+    expect(sev(checks, 'version-skew')).toBe('warn')
   })
   it('ok when all three agree', async () => {
     expect(sev(await run(), 'version-skew')).toBe('ok')
@@ -211,8 +237,13 @@ describe('connection-lock-consistency', () => {
   it('ok when the live daemon holds the lock', async () => {
     expect(sev(await run(), 'connection-lock-consistency')).toBe('ok')
   })
-  it('ok when there is no lockfile', async () => {
-    expect(sev(await run({ readConnectionLockHolder: () => null }), 'connection-lock-consistency')).toBe('ok')
+  it('ok when there is no lockfile and no daemon alive', async () => {
+    const checks = await run({ readConnectionLockHolder: () => null, probeHello: async () => null, probeStatus: async () => null })
+    expect(sev(checks, 'connection-lock-consistency')).toBe('ok')
+  })
+  it('warn when a daemon is alive but NO lock holder exists (protocol drift)', async () => {
+    const checks = await run({ readConnectionLockHolder: () => null })
+    expect(sev(checks, 'connection-lock-consistency')).toBe('warn')
   })
   it('warn on a stale (dead-holder) pidfile', async () => {
     const checks = await run({ readConnectionLockHolder: () => ({ pid: 999, alive: false }) })
@@ -325,6 +356,19 @@ describe('ownership-on-teammate', () => {
     })
     expect(sev(checks, 'ownership-on-teammate')).toBe('error')
   })
+  it('warn when the owner points at a session that is no longer registered (dangling)', async () => {
+    const checks = await run({
+      probeStatus: async () =>
+        healthyStatus({
+          owner_session_id: 'session:gone',
+          effective_target_session_id: 'session:gone',
+          sessions: [
+            { sessionId: 'dispatcher:aaa', pid: 300, proxyVersion: '0.7.0', role: 'dispatcher', metadata: {} },
+          ],
+        }),
+    })
+    expect(sev(checks, 'ownership-on-teammate')).toBe('warn')
+  })
   it('ok when the dispatcher legitimately owns the channel', async () => {
     expect(sev(await run(), 'ownership-on-teammate')).toBe('ok')
   })
@@ -349,6 +393,17 @@ describe('broker-owner-handoff-gap', () => {
           owner_session_id: 'session:t',
           effective_target_session_id: 'session:t',
           sessions: [{ sessionId: 'session:t', pid: 300, proxyVersion: '0.7.0', role: 'session', metadata: { teammate_name: 'worker', transport: 'broker' } }],
+        }),
+    })
+    expect(sev(checks, 'broker-owner-handoff-gap')).toBe('warn')
+  })
+  it('warn on a broker transport even without a teammate_name (transport is authoritative)', async () => {
+    const checks = await run({
+      probeStatus: async () =>
+        healthyStatus({
+          owner_session_id: 'session:t',
+          effective_target_session_id: 'session:t',
+          sessions: [{ sessionId: 'session:t', pid: 300, proxyVersion: '0.7.0', role: 'session', metadata: { transport: 'broker' } }],
         }),
     })
     expect(sev(checks, 'broker-owner-handoff-gap')).toBe('warn')

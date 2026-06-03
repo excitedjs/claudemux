@@ -13,7 +13,7 @@
  */
 
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js'
 
 import { connectToDaemon, type ProxyConnection } from './proxy-transport'
 import { CHANNEL_TOOLS, channelNotification } from './server'
@@ -28,6 +28,34 @@ export interface ProxyMcpServer {
     handler: (request: { params: { name: string; arguments?: Record<string, unknown> } }) => unknown,
   ): void
   notification(notification: { method: string; params: unknown }): Promise<void>
+}
+
+/** A local handler for `feishu_channel_doctor`; spawns nothing and forwards nothing. */
+export type DoctorRunner = (verbose: boolean) => Promise<CallToolResult>
+
+/** The static tool surface a proxy advertises, optionally including the doctor. */
+export function proxyTools(includeDoctor: boolean): Tool[] {
+  return [...CHANNEL_TOOLS, ...CHANNEL_OWNER_TOOLS, ...(includeDoctor ? [DOCTOR_TOOL] : [])]
+}
+
+/**
+ * Expose the tool surface BEFORE a daemon connection exists, so
+ * `feishu_channel_doctor` is reachable even when the daemon is unreachable —
+ * and that diagnosis path spawns no daemon (the doctor is handled locally).
+ * Forwarded tools report that the daemon is still connecting; `startProxy`
+ * replaces these handlers with the live forwarding set once it attaches.
+ */
+export function installDoctorBootstrap(mcpServer: ProxyMcpServer, runDoctor: DoctorRunner): void {
+  mcpServer.setRequestHandler(ListToolsRequestSchema, () => ({ tools: proxyTools(true) }))
+  mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
+    if (request.params.name === DOCTOR_TOOL_NAME) {
+      return (await runDoctor(request.params.arguments?.verbose === true)) as CallToolResult
+    }
+    return {
+      content: [{ type: 'text', text: 'Feishu daemon is connecting; retry shortly.' }],
+      isError: true,
+    } as CallToolResult
+  })
 }
 
 export interface StartProxyDeps {
@@ -85,7 +113,7 @@ export async function startProxy(deps: StartProxyDeps): Promise<ProxyHandle> {
   // or unreachable daemon instead of being forwarded to the subject.
   const runDoctor = deps.runDoctor
   deps.mcpServer.setRequestHandler(ListToolsRequestSchema, () => ({
-    tools: [...CHANNEL_TOOLS, ...CHANNEL_OWNER_TOOLS, ...(runDoctor ? [DOCTOR_TOOL] : [])],
+    tools: proxyTools(runDoctor !== undefined),
   }))
   deps.mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (runDoctor && request.params.name === DOCTOR_TOOL_NAME) {

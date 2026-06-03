@@ -188,6 +188,14 @@ describe('readStateDirHealth — never surfaces secret values', () => {
     expect(health.hasAppSecret).toBe(false)
   })
 
+  it('treats an empty credential value as missing, not present', () => {
+    writeFileSync(join(tmp, '.env'), 'FEISHU_APP_ID=\nFEISHU_APP_SECRET=""\n')
+    const health = readStateDirHealth(tmp)
+    expect(health.envPresent).toBe(true)
+    expect(health.hasAppId).toBe(false)
+    expect(health.hasAppSecret).toBe(false)
+  })
+
   it('classifies a corrupt access.json', () => {
     writeFileSync(join(tmp, '.env'), 'FEISHU_APP_ID=a\nFEISHU_APP_SECRET=b\n')
     writeFileSync(join(tmp, 'access.json'), '{ not valid json')

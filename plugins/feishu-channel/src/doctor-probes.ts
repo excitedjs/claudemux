@@ -70,6 +70,7 @@ export function defaultDoctorDeps(opts: DefaultDoctorDepsOptions): DoctorDeps {
     enumerateServers: () => enumerateServers(),
     isPidAlive: (pid) => isPidAlive(pid),
     readStateDirHealth: () => readStateDirHealth(base),
+    socketExists: () => existsSync(socketPath),
   }
 }
 
@@ -293,7 +294,12 @@ export function readStateDirHealth(base: string): StateDirHealth {
   }
 }
 
-/** Read only which credential keys exist in `.env`; never the values. */
+/**
+ * Read which credential keys are present AND non-empty in `.env`, never the
+ * values. An empty assignment (`FEISHU_APP_ID=`) is reported as missing — the
+ * channel cannot connect on a blank credential, so a present-but-empty key must
+ * not read as set.
+ */
 function readEnvKeys(path: string): { present: boolean; hasAppId: boolean; hasAppSecret: boolean } {
   let text: string
   try {
@@ -304,7 +310,12 @@ function readEnvKeys(path: string): { present: boolean; hasAppId: boolean; hasAp
   let hasAppId = false
   let hasAppSecret = false
   for (const line of text.split('\n')) {
-    const key = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line)?.[1]
+    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line)
+    if (!match) continue
+    const key = match[1]
+    // Mirror readEnvFile's quote-stripping so a `KEY=""` is also seen as empty.
+    const value = (match[2] ?? '').replace(/^["']|["']$/g, '')
+    if (value.length === 0) continue
     if (key === 'FEISHU_APP_ID') hasAppId = true
     if (key === 'FEISHU_APP_SECRET') hasAppSecret = true
   }

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 
 import { startDaemonServer, type DaemonServer } from '../src/daemon-server'
-import { startProxy, type ProxyHandle, type ProxyMcpServer } from '../src/proxy'
+import { installDoctorBootstrap, startProxy, type ProxyHandle, type ProxyMcpServer } from '../src/proxy'
 import {
   CHANNEL_TOOLS,
   channelNotification,
@@ -465,5 +465,37 @@ describe('proxy-local doctor tool', () => {
     expect(runDoctor).toHaveBeenCalledWith(true)
     expect(handleTool).not.toHaveBeenCalled()
     expect(result).toEqual({ content: [{ type: 'text', text: JSON.stringify({ verbose: true }) }] })
+  })
+})
+
+describe('installDoctorBootstrap — doctor reachable before/without a daemon', () => {
+  test('runs the doctor with no daemon connection and no spawn, and advertises it', async () => {
+    const mcp = fakeMcp()
+    const runDoctor = vi.fn(async (verbose: boolean) => ({
+      content: [{ type: 'text' as const, text: JSON.stringify({ verbose }) }],
+    }))
+    // No socket, no daemon, no connection manager — purely local.
+    installDoctorBootstrap(mcp.server, runDoctor)
+
+    const list = (await mcp.handlers.get(ListToolsRequestSchema)!({ params: { name: '' } })) as {
+      tools: Array<{ name: string }>
+    }
+    expect(list.tools.some((t) => t.name === 'feishu_channel_doctor')).toBe(true)
+
+    const doctorResult = await mcp.handlers.get(CallToolRequestSchema)!({
+      params: { name: 'feishu_channel_doctor', arguments: {} },
+    })
+    expect(runDoctor).toHaveBeenCalledWith(false)
+    expect(doctorResult).toEqual({ content: [{ type: 'text', text: JSON.stringify({ verbose: false }) }] })
+  })
+
+  test('a forwarded tool reports the daemon is still connecting', async () => {
+    const mcp = fakeMcp()
+    installDoctorBootstrap(mcp.server, async () => ({ content: [{ type: 'text', text: '{}' }] }))
+    const result = (await mcp.handlers.get(CallToolRequestSchema)!({
+      params: { name: 'reply', arguments: { chat_id: 'oc_1', text: 'hi' } },
+    })) as { isError?: boolean; content: Array<{ text: string }> }
+    expect(result.isError).toBe(true)
+    expect(result.content[0]?.text).toMatch(/connecting/i)
   })
 })

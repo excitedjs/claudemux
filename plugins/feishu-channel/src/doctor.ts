@@ -164,6 +164,8 @@ export interface DoctorDeps {
   enumerateServers: () => ServerProcess[]
   isPidAlive: (pid: number) => boolean
   readStateDirHealth: () => StateDirHealth
+  /** Whether the daemon socket file exists on disk (distinguishes stale-socket from no-daemon). */
+  socketExists: () => boolean
 }
 
 /** The full diagnosis report. */
@@ -186,12 +188,16 @@ interface Evidence {
   lockHolder: LockHolder | null
   servers: ServerProcess[]
   stateHealth: StateDirHealth | null
+  socketExists: boolean
+  /** Fail-soft wrappers for the per-input probes the checks call directly. */
+  isPidAlive: (pid: number) => boolean
+  readManifestVersionAt: (dir: string) => string | undefined
 }
 
 const LIMITATIONS = [
   'Scoped to one FEISHU_CHANNEL_STATE_DIR; a daemon launched under a different state dir has its own socket and connection.lock and is invisible to this run.',
   'The diagnosis is only as new as the code running it. A resumed session keeps its original proxy, so the MCP tool can carry stale logic — run the CLI (npm run doctor) from the pinned install for a current, daemon-independent diagnosis.',
-  'Broker-vs-stdio transport of the channel owner is not self-reported yet, so broker-owner-handoff-gap is an annotation, not a positive detection, until the metadata.transport field is wired end-to-end.',
+  'broker-owner-handoff-gap relies on the launcher injecting CLAUDEMUX_CHANNEL_TRANSPORT so the proxy can self-report metadata.transport. When that env is absent (a teammate the spawner did not tag), the check degrades to an annotation rather than a positive detection.',
 ]
 
 /**
@@ -205,15 +211,16 @@ export async function collectDiagnosis(deps: DoctorDeps): Promise<DoctorReport> 
 
   const checks: DoctorCheck[] = [
     checkDaemonReachable(ev),
+    checkSocketStaleness(ev),
     checkVersionSkew(ev, deps),
     checkProxyVersionConsistency(ev),
     checkDaemonLaunchSource(ev, deps),
-    checkPinnedVsDisk(ev, deps),
+    checkPinnedVsDisk(ev),
     checkConnectionLock(ev),
     checkDaemonSingleton(ev),
     checkCoexistingServers(ev),
-    checkOrphanServers(ev, deps),
-    checkOrphanProxies(ev, deps),
+    checkOrphanServers(ev),
+    checkOrphanProxies(ev),
     checkOwnershipOnTeammate(ev),
     checkBrokerOwnerHandoff(ev),
     checkStateDir(ev),
@@ -241,6 +248,9 @@ async function gather(deps: DoctorDeps): Promise<Evidence> {
     safeAsync(deps.probeHello, null),
     safeAsync(deps.probeStatus, null),
   ])
+  // Every per-input probe a check calls directly is wrapped here so a throwing
+  // probe degrades that check to a falsy/undefined reading instead of crashing
+  // the whole diagnosis — collectDiagnosis must never throw on a probe failure.
   return {
     hello,
     status,
@@ -248,7 +258,33 @@ async function gather(deps: DoctorDeps): Promise<Evidence> {
     lockHolder: safeSync(deps.readConnectionLockHolder, null),
     servers: safeSync(deps.enumerateServers, [] as ServerProcess[]),
     stateHealth: safeSync(deps.readStateDirHealth, null),
+    socketExists: safeSync(deps.socketExists, false),
+    isPidAlive: (pid) => safeSync(() => deps.isPidAlive(pid), false),
+    readManifestVersionAt: (dir) => safeSync(() => deps.readManifestVersionAt(dir), undefined),
   }
+}
+
+function checkSocketStaleness(ev: Evidence): DoctorCheck {
+  const id = 'socket-staleness'
+  const title = 'No stale daemon socket file'
+  if (!ev.socketExists) {
+    return mk(id, title, 'ok', {
+      detail: ev.hello ? 'Daemon socket is live.' : 'No daemon socket file (the daemon is simply not running).',
+      remediation: 'No action needed.',
+    })
+  }
+  if (ev.hello) {
+    return mk(id, title, 'ok', {
+      detail: 'Daemon socket file exists and a live daemon answers it.',
+      remediation: 'No action needed.',
+    })
+  }
+  // File present but nothing answers — a crash left the socket behind. It can
+  // make a fresh daemon hit EADDRINUSE; the next proxy unlinks and rebinds it.
+  return mk(id, title, 'warn', {
+    detail: 'A daemon socket file is present but no daemon answers it — a stale socket left by a crashed daemon, distinct from "no daemon running". It can block a fresh bind until removed.',
+    remediation: 'Start a session so a fresh proxy unlinks the stale socket and rebinds, or remove daemon.sock from the state dir.',
+  })
 }
 
 // --- checks ---------------------------------------------------------------
@@ -291,6 +327,16 @@ function checkVersionSkew(ev: Evidence, deps: DoctorDeps): DoctorCheck {
       detail: `Daemon is running ${daemon} but ${pinned} is pinned on disk; the upgrade did not hot-reload into the daemon.`,
       remediation:
         'Restart the daemon so it loads the pinned version: stop the daemon process and re-trigger the channel (a fresh session will spawn the current daemon). A stuck old daemon may need a session/host restart.',
+      evidence,
+    })
+  }
+  // Soft: the daemon loaded a NEWER version than is pinned — a rollback or a
+  // reverted pin, still a live-daemon/disk mismatch worth surfacing.
+  if (daemonVsPinned === 1) {
+    return mk('version-skew', 'Daemon vs pinned vs proxy versions', 'warn', {
+      detail: `Daemon is running ${daemon}, newer than the pinned ${pinned} — a rollback or a reverted pin. The live daemon does not match the install on disk.`,
+      remediation:
+        'If the pin was intentional, restart the daemon to load the pinned version; otherwise re-pin to the intended version.',
       evidence,
     })
   }
@@ -375,14 +421,14 @@ function checkDaemonLaunchSource(ev: Evidence, deps: DoctorDeps): DoctorCheck {
   })
 }
 
-function checkPinnedVsDisk(ev: Evidence, deps: DoctorDeps): DoctorCheck {
+function checkPinnedVsDisk(ev: Evidence): DoctorCheck {
   if (!ev.pinned) {
     return mk('pinned-vs-disk', 'Pinned version matches the install on disk', 'unknown', {
       detail: 'Could not read the pinned install record (installed_plugins.json missing, unreadable, or a dev source).',
       remediation: 'No action needed for a dev checkout; otherwise verify the plugin install.',
     })
   }
-  const onDisk = deps.readManifestVersionAt(ev.pinned.installPath)
+  const onDisk = ev.readManifestVersionAt(ev.pinned.installPath)
   if (!onDisk) {
     return mk('pinned-vs-disk', 'Pinned version matches the install on disk', 'unknown', {
       detail: `Pinned version is ${ev.pinned.version} but the plugin manifest at the install path could not be read.`,
@@ -408,9 +454,20 @@ function checkConnectionLock(ev: Evidence): DoctorCheck {
   const id = 'connection-lock-consistency'
   const title = 'Inbound lock held by the live daemon'
   const holder = ev.lockHolder
+  const daemonAlive = ev.hello !== null || ev.status?.daemon !== undefined
   if (!holder) {
+    // A healthy daemon takes the legacy inbound lock at startup. If a daemon is
+    // proven alive (hello/status) yet no holder exists, that is protocol drift —
+    // the live daemon is not holding the inbound lock — not a clean state.
+    if (daemonAlive) {
+      return mk(id, title, 'warn', {
+        detail: 'A daemon is alive but connection.lock is absent — the live daemon is not holding the inbound lock (protocol drift). This may also be a brief startup window before the lock is acquired.',
+        remediation: 'Re-run; if it persists, restart the daemon so it reacquires the inbound lock.',
+        evidence: { hello_pid: ev.hello?.pid ?? null },
+      })
+    }
     return mk(id, title, 'ok', {
-      detail: 'No connection.lock present — no legacy inbound-lock holder.',
+      detail: 'No connection.lock present and no daemon alive — no legacy inbound-lock holder.',
       remediation: 'No action needed.',
     })
   }
@@ -551,13 +608,13 @@ function checkCoexistingServers(ev: Evidence): DoctorCheck {
   })
 }
 
-function checkOrphanServers(ev: Evidence, deps: DoctorDeps): DoctorCheck {
+function checkOrphanServers(ev: Evidence): DoctorCheck {
   const id = 'orphan-servers'
   const title = 'No stranded reparented server'
   // A live server reparented to pid 1 (parent dead) is a legacy-shape symptom.
   // Current shutdown watches the parent via stdin EOF, not ppid, so this flags a
   // stranded old process, not an active reliance on ppid.
-  const orphans = ev.servers.filter((s) => s.ppid === 1 && deps.isPidAlive(s.pid))
+  const orphans = ev.servers.filter((s) => s.ppid === 1 && ev.isPidAlive(s.pid))
   if (orphans.length === 0) {
     return mk(id, title, 'ok', {
       detail: 'No reparented (orphaned) server processes.',
@@ -571,7 +628,7 @@ function checkOrphanServers(ev: Evidence, deps: DoctorDeps): DoctorCheck {
   })
 }
 
-function checkOrphanProxies(ev: Evidence, deps: DoctorDeps): DoctorCheck {
+function checkOrphanProxies(ev: Evidence): DoctorCheck {
   const id = 'orphan-proxies'
   const title = 'No dead proxy still registered'
   if (!ev.status) {
@@ -580,7 +637,7 @@ function checkOrphanProxies(ev: Evidence, deps: DoctorDeps): DoctorCheck {
       remediation: 'Run the CLI doctor or retry once the daemon is reachable.',
     })
   }
-  const dead = ev.status.sessions.filter((s) => !deps.isPidAlive(s.pid))
+  const dead = ev.status.sessions.filter((s) => !ev.isPidAlive(s.pid))
   if (dead.length === 0) {
     return mk(id, title, 'ok', {
       detail: `All ${ev.status.sessions.length} registered proxies are alive.`,
@@ -609,6 +666,17 @@ function checkOwnershipOnTeammate(ev: Evidence): DoctorCheck {
   const target = targetId ? byId.get(targetId) : undefined
   const dispatcherRole = st.sessions.filter((s) => s.role === 'dispatcher')
   const dispatcher = st.dispatcher_session_id ? byId.get(st.dispatcher_session_id) : undefined
+
+  // A named owner that is no longer among the live sessions is a dangling owner:
+  // inbound has a target that does not exist, so messages reach nothing until the
+  // channel is reclaimed. Distinct from "no owner set" (targetId null).
+  if (targetId && !target) {
+    return mk(id, title, 'warn', {
+      detail: `Channel owner ${targetId} is not among the live sessions — a dangling owner; inbound is routed to a session that is gone.`,
+      remediation: 'Run feishu_channel_reclaim from the dispatcher to return the channel to a live owner.',
+      evidence: { owner: targetId, live_sessions: st.sessions.map((s) => s.sessionId) },
+    })
+  }
 
   const reasons: string[] = []
   // (b) More than one dispatcher-role session registered.
@@ -665,33 +733,44 @@ function checkBrokerOwnerHandoff(ev: Evidence): DoctorCheck {
   }
   const targetId = st.effective_target_session_id ?? st.owner_session_id
   const target = targetId ? st.sessions.find((s) => s.sessionId === targetId) : undefined
-  const isTeammate = target?.metadata.teammate_name !== undefined
-  if (!target || !isTeammate) {
+  if (!target) {
     return mk(id, title, 'ok', {
-      detail: target ? `Owner ${target.sessionId} is not a teammate; no handoff gap applies.` : 'No effective owner set.',
+      detail: 'No effective owner set.',
       remediation: 'No action needed.',
     })
   }
   const transport = target.metadata.transport
-  if (transport === undefined) {
-    // The transport field is not wired yet — annotate, do not assert.
-    return mk(id, title, 'unknown', {
-      detail: `Owner is teammate ${target.metadata.teammate_name}; its control-plane transport is not self-reported, so a broker handoff gap cannot be ruled out. If it is a stream-json/broker teammate, inbound may not arrive.`,
-      remediation: 'If the teammate is not receiving channel messages, return the channel to the dispatcher (feishu_channel_return_to_dispatcher) or use a stdio teammate.',
-      evidence: { owner: target.sessionId, teammate_name: target.metadata.teammate_name },
-    })
-  }
+  const teammate = target.metadata.teammate_name
+  const who = teammate ? `teammate ${teammate}` : `session ${target.sessionId}`
+  // Transport is the authoritative capability signal — prefer it over the
+  // teammate label. A self-reported `broker` owner cannot receive inbound
+  // regardless of whether a teammate_name was also set.
   if (transport === 'broker') {
     return mk(id, title, 'warn', {
-      detail: `Owner is broker teammate ${target.metadata.teammate_name}; broker teammates cannot receive channel inbound, so the handoff may be silently broken.`,
+      detail: `Owner is a broker ${who}; broker control-planes cannot receive channel inbound, so the handoff may be silently broken.`,
       remediation: 'Return the channel to the dispatcher, or hand it to a stdio teammate instead.',
       evidence: { owner: target.sessionId, transport },
     })
   }
-  return mk(id, title, 'ok', {
-    detail: `Owner is teammate ${target.metadata.teammate_name} on transport ${transport}; inbound delivery is supported.`,
-    remediation: 'No action needed.',
-    evidence: { owner: target.sessionId, transport },
+  if (transport === 'stdio') {
+    return mk(id, title, 'ok', {
+      detail: `Owner is a stdio ${who}; inbound delivery is supported.`,
+      remediation: 'No action needed.',
+      evidence: { owner: target.sessionId, transport },
+    })
+  }
+  // No transport reported. Only a teammate owner is at risk (the dispatcher
+  // always receives); annotate rather than assert.
+  if (teammate === undefined) {
+    return mk(id, title, 'ok', {
+      detail: `Owner ${target.sessionId} is not a teammate; no handoff gap applies.`,
+      remediation: 'No action needed.',
+    })
+  }
+  return mk(id, title, 'unknown', {
+    detail: `Owner is teammate ${teammate}; its control-plane transport is not self-reported, so a broker handoff gap cannot be ruled out. If it is a stream-json/broker teammate, inbound may not arrive.`,
+    remediation: 'If the teammate is not receiving channel messages, return the channel to the dispatcher (feishu_channel_return_to_dispatcher) or use a stdio teammate. Tag the spawn with CLAUDEMUX_CHANNEL_TRANSPORT to make this check definitive.',
+    evidence: { owner: target.sessionId, teammate_name: teammate },
   })
 }
 
