@@ -41,6 +41,57 @@ export function probeProcess(pid: number): ProcessProbe | undefined {
   return { command, cwd }
 }
 
+/** One process as enumerated by `ps -A`. */
+export interface ProcessRow {
+  pid: number
+  ppid: number
+  /** The process's full command line, as `ps` renders it. */
+  command: string
+}
+
+/**
+ * Enumerate every process the current user can see, with its parent pid and
+ * command line. `-A` lists all processes, `-ww` defers to no terminal width so a
+ * long npm/tsx/node command line is not truncated, and `-o ...=` prints bare
+ * columns with no header — all portable across BSD (macOS) and GNU (Linux).
+ * Returns `[]` on any failure (a missing tool, a probe that timed out), so a
+ * probe failure degrades to "no processes seen" rather than throwing.
+ */
+export function enumerateProcesses(): ProcessRow[] {
+  let out: string
+  try {
+    out = execFileSync('ps', ['-A', '-ww', '-o', 'pid=,ppid=,args='], {
+      encoding: 'utf8',
+      timeout: PROBE_TIMEOUT_MS,
+      maxBuffer: 8 * 1024 * 1024,
+    })
+  } catch {
+    return []
+  }
+  const rows: ProcessRow[] = []
+  for (const line of out.split('\n')) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)
+    if (!match) continue
+    const pid = Number(match[1])
+    const ppid = Number(match[2])
+    const command = match[3]!.trim()
+    if (!Number.isInteger(pid) || command.length === 0) continue
+    rows.push({ pid, ppid, command })
+  }
+  return rows
+}
+
+/**
+ * Read a process's cwd, the single source of truth for cwd inspection: Linux
+ * exposes it as the `/proc/<pid>/cwd` symlink, macOS has no `/proc` and goes
+ * through `lsof`. Exported so callers (the lock's holder probe, the doctor's
+ * process enumeration) never re-derive the OS branch. `undefined` when the cwd
+ * cannot be read.
+ */
+export function readProcessCwd(pid: number): string | undefined {
+  return readCwd(pid)
+}
+
 /** Read a process's command line via `ps` — `-p`/`-o args=` are portable across BSD and GNU. */
 function readCommand(pid: number): string | undefined {
   try {

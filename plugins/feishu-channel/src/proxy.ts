@@ -18,6 +18,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { connectToDaemon, type ProxyConnection } from './proxy-transport'
 import { CHANNEL_TOOLS, channelNotification } from './server'
 import { CHANNEL_OWNER_TOOLS } from './channel-owner'
+import { DOCTOR_TOOL, DOCTOR_TOOL_NAME } from './doctor'
 import { comparePluginVersions } from './version'
 
 /** The slice of the MCP `Server` the proxy drives (lets tests inject a fake). */
@@ -39,6 +40,13 @@ export interface StartProxyDeps {
   metadata?: Record<string, string>
   /** The MCP server to wire (real `createMcpServer()` or a test fake). */
   mcpServer: ProxyMcpServer
+  /**
+   * Run the local `feishu_channel_doctor` diagnosis. Provided, the proxy
+   * exposes the doctor tool and handles it in-process — read-only, never
+   * forwarded to the daemon (the daemon may be the stale subject) and never
+   * spawning anything. Omitted, the tool is not advertised.
+   */
+  runDoctor?(verbose: boolean): Promise<CallToolResult>
   connectToDaemonFn?: typeof connectToDaemon
   onDaemonMissing?(): void
   reconnectDelayMs?: number
@@ -72,11 +80,17 @@ export async function startProxy(deps: StartProxyDeps): Promise<ProxyHandle> {
   await manager.start()
 
   // Tool surface is static; forward each call to the daemon, which runs it
-  // against the real transport and returns the CallToolResult.
+  // against the real transport and returns the CallToolResult. The one
+  // exception is the doctor: it is handled locally so it can diagnose a stale
+  // or unreachable daemon instead of being forwarded to the subject.
+  const runDoctor = deps.runDoctor
   deps.mcpServer.setRequestHandler(ListToolsRequestSchema, () => ({
-    tools: [...CHANNEL_TOOLS, ...CHANNEL_OWNER_TOOLS],
+    tools: [...CHANNEL_TOOLS, ...CHANNEL_OWNER_TOOLS, ...(runDoctor ? [DOCTOR_TOOL] : [])],
   }))
   deps.mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
+    if (runDoctor && request.params.name === DOCTOR_TOOL_NAME) {
+      return (await runDoctor(request.params.arguments?.verbose === true)) as CallToolResult
+    }
     const result = await manager.callTool(request.params.name, request.params.arguments ?? {})
     return result as CallToolResult
   })

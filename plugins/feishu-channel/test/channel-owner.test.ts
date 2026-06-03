@@ -21,6 +21,32 @@ function text(result: unknown): string {
   return ((result as { content: Array<{ text: string }> }).content[0]?.text ?? '')
 }
 
+describe('ChannelOwnerState daemon identity in status', () => {
+  test('includes the daemon block when an identity provider is given', () => {
+    const owner = new ChannelOwnerState(() => {}, () => ({
+      version: '0.7.0',
+      pid: 4242,
+      generation: 1,
+      started_at: 500,
+      launch_path: '/cache/feishu-channel/0.7.0',
+    }))
+    const status = owner.status(new Set()) as { daemon?: { version: string; pid: number } }
+    expect(status.daemon).toEqual({
+      version: '0.7.0',
+      pid: 4242,
+      generation: 1,
+      started_at: 500,
+      launch_path: '/cache/feishu-channel/0.7.0',
+    })
+  })
+
+  test('omits the daemon block for an older daemon with no provider', () => {
+    const owner = new ChannelOwnerState()
+    const status = owner.status(new Set()) as Record<string, unknown>
+    expect('daemon' in status).toBe(false)
+  })
+})
+
 describe('ChannelOwnerState', () => {
   test('dispatcher is the default owner on registration', () => {
     const owner = new ChannelOwnerState()

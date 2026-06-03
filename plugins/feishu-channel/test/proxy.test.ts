@@ -403,4 +403,67 @@ describe('deriveProxyMetadata', () => {
       teammate_name: 'ok-name_1',
     })
   })
+
+  test('reports a known channel transport, ignores an unknown one', () => {
+    expect(claudemuxIdentityFromEnv({ CLAUDEMUX_CHANNEL_TRANSPORT: 'broker' })).toEqual({ transport: 'broker' })
+    expect(claudemuxIdentityFromEnv({ CLAUDEMUX_CHANNEL_TRANSPORT: 'stdio' })).toEqual({ transport: 'stdio' })
+    expect(claudemuxIdentityFromEnv({ CLAUDEMUX_CHANNEL_TRANSPORT: 'http' })).toEqual({})
+    expect(
+      claudemuxIdentityFromEnv({ CLAUDEMUX_TEAMMATE_NAME: 'worker', CLAUDEMUX_CHANNEL_TRANSPORT: 'broker' }),
+    ).toEqual({ teammate_name: 'worker', transport: 'broker' })
+  })
+})
+
+describe('proxy-local doctor tool', () => {
+  let socketPath = ''
+  let daemon: DaemonServer | null = null
+  let proxy: ProxyHandle | null = null
+  let m = 0
+
+  beforeEach(() => {
+    socketPath = join(tmpdir(), `feishu-doctor-${process.pid}-${m++}.sock`)
+  })
+  afterEach(async () => {
+    proxy?.close()
+    await daemon?.close()
+    daemon = null
+    proxy = null
+  })
+
+  async function bootWithDoctor() {
+    const handleTool = vi.fn(async (name: string, args: Record<string, unknown>) => ({ tool: name, args }))
+    daemon = await startDaemonServer({ socketPath, daemonVersion: '0.2.1', generation: 1, core: { handleTool } })
+    const mcp = fakeMcp()
+    const runDoctor = vi.fn(async (verbose: boolean) => ({
+      content: [{ type: 'text' as const, text: JSON.stringify({ verbose }) }],
+    }))
+    proxy = await startProxy({
+      socketPath,
+      sessionId: 's1',
+      pid: 1,
+      proxyVersion: '0.2.1',
+      role: 'session',
+      mcpServer: mcp.server,
+      runDoctor,
+    })
+    return { mcp, handleTool, runDoctor }
+  }
+
+  test('advertises feishu_channel_doctor when a runner is provided', async () => {
+    const { mcp } = await bootWithDoctor()
+    const list = (await mcp.handlers.get(ListToolsRequestSchema)!({ params: { name: '' } })) as {
+      tools: Array<{ name: string }>
+    }
+    expect(list.tools.some((t) => t.name === 'feishu_channel_doctor')).toBe(true)
+  })
+
+  test('handles the doctor locally and never forwards it to the daemon', async () => {
+    const { mcp, handleTool, runDoctor } = await bootWithDoctor()
+    const result = await mcp.handlers.get(CallToolRequestSchema)!({
+      params: { name: 'feishu_channel_doctor', arguments: { verbose: true } },
+    })
+    expect(runDoctor).toHaveBeenCalledWith(true)
+    expect(handleTool).not.toHaveBeenCalled()
+    expect(result).toEqual({ content: [{ type: 'text', text: JSON.stringify({ verbose: true }) }] })
+  })
 })

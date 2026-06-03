@@ -78,13 +78,31 @@ export type OwnershipToolResult =
   | { handled: true; result: CallToolResult }
   | { handled: false }
 
+/**
+ * Authoritative daemon identity surfaced in `feishu_channel_status`. The daemon
+ * knows these exactly (its loaded version, pid, and the launch dir resolved from
+ * `import.meta.url`), which `feishu_channel_doctor` would otherwise reconstruct
+ * fragilely from `ps`/`lsof`. Additive: an older daemon omits the block, and the
+ * doctor falls back to the socket greeting plus process enumeration.
+ */
+export interface DaemonIdentity {
+  version: string
+  pid: number
+  generation: number
+  started_at: number
+  launch_path: string
+}
+
 export class ChannelOwnerState {
   #ownerSessionId: string | undefined
   #dispatcherSessionId: string | undefined
   #grantedSessionId: string | undefined
   #leaseEpoch = 0
 
-  constructor(private readonly onChanged: () => void = () => {}) {}
+  constructor(
+    private readonly onChanged: () => void = () => {},
+    private readonly daemonIdentity?: () => DaemonIdentity,
+  ) {}
 
   register(conn: DaemonConnection): void {
     const session = conn.session
@@ -224,6 +242,7 @@ export class ChannelOwnerState {
     const sessions = [...connections]
       .map((conn) => conn.session)
       .filter((s): s is NonNullable<typeof s> => s !== null)
+    const daemon = this.daemonIdentity?.()
     return {
       owner_session_id: this.#ownerSessionId ?? null,
       dispatcher_session_id: this.#dispatcherSessionId ?? null,
@@ -231,6 +250,7 @@ export class ChannelOwnerState {
       effective_target_session_id: this.select(connections)?.session?.sessionId ?? null,
       lease_epoch: this.#leaseEpoch,
       sessions,
+      ...(daemon ? { daemon } : {}),
     }
   }
 

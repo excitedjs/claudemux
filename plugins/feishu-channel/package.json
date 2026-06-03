@@ -7,6 +7,7 @@
   "scripts": {
     "start": "npm install --silent --no-audit --no-fund >&2 && tsx src/server.ts",
     "daemon": "tsx src/server.ts --daemon",
+    "doctor": "tsx src/server.ts --doctor",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

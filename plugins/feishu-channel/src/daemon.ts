@@ -39,6 +39,12 @@ export interface StartDaemonDeps {
   socketPath: string
   daemonVersion: string
   generation: number
+  /**
+   * The dir this daemon was launched from (its plugin root, resolved from
+   * `import.meta.url`). Surfaced in `feishu_channel_status` as the authoritative
+   * daemon launch path for `feishu_channel_doctor`.
+   */
+  launchPath?: string
   /** This daemon's lock record (pid, startedAt, socketPath, daemonVersion). */
   self: DaemonLockRecord
   /** Re-probe (lock invariant ①) for an existing holder; defaults to the socket `hello` probe. */
@@ -95,7 +101,18 @@ export async function startDaemon(deps: StartDaemonDeps): Promise<StartDaemonRes
 
   const queue = openInboundQueue(deps.queueFile)
   let routePending = () => {}
-  const owner = new ChannelOwnerState(() => routePending())
+  const owner = new ChannelOwnerState(
+    () => routePending(),
+    () => ({
+      version: deps.daemonVersion,
+      pid: deps.self.pid,
+      generation: deps.generation,
+      started_at: deps.self.startedAt,
+      // The daemon's cwd is its launch dir (the spawner sets cwd to the plugin
+      // root), so it is the right fallback when an explicit path was not passed.
+      launch_path: deps.launchPath ?? process.cwd(),
+    }),
+  )
 
   // Lazy connection ref breaks the core<->server<->notify cycle: the router is
   // built before the server, but only reads connections at delivery time.
