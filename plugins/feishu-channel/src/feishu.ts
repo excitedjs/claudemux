@@ -35,6 +35,7 @@ import {
   releaseInstanceLock,
 } from './instance-lock'
 import { cardToContent, renderMarkdownToCards, type RenderedCard } from '@excitedjs/feishu-transport'
+import { styleReplyCard, styleReplyCards } from './card-style'
 
 /** Cap on a single WebSocket handshake before it is aborted into a retry. */
 const WS_HANDSHAKE_TIMEOUT_MS = 15_000
@@ -704,7 +705,10 @@ export function createFeishuTransport(
       // everything else to `tag: markdown` (lark_md) — keeps GFM tables and
       // ATX headings from leaking through as literal `|` and `#`. A body too
       // large for one card produces several cards, each its own message_id.
-      const cards = renderMarkdownToCards(text)
+      // Re-style the rendered cards (size-adaptive collapsible frame) before
+      // sending: short replies pass through untouched, long ones gain a
+      // foldable panel and a tinted header. See `card-style.ts`.
+      const cards = styleReplyCards(renderMarkdownToCards(text))
       const messageIds: string[] = []
       // The chat the message actually landed in. The whole send is either a
       // reply (every card replies to the same message_id) or a create (every
@@ -756,7 +760,9 @@ export function createFeishuTransport(
       // residual case of a single-card body that still serialises past the
       // 30 KB request cap — both checks surface as actionable errors before
       // any SDK round-trip.
-      const card = renderSingleCard(text)
+      // Style the single rendered card to match the send path, then verify
+      // the styled content still fits one card before patching in place.
+      const card = styleReplyCard(renderSingleCard(text))
       const cardContent = cardToContent(card)
       assertCardContentFits(cardContent)
       try {
