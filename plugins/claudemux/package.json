@@ -1,6 +1,6 @@
 {
   "name": "@excitedjs/tm",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "description": "Multi-repo AI orchestrator CLI — spawn, message, and wait on Claude/Codex teammates across sibling repos.",
   "type": "module",
   "license": "MIT",
