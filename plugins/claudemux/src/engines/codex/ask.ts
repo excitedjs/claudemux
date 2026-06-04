@@ -6,7 +6,6 @@ import {
   daemonAlive,
   listDaemons,
   releaseDaemonBorrow,
-  touchLastSeen,
   tryBorrowDaemon,
 } from './supervisor.js'
 import { die } from './verb-common.js'
@@ -52,7 +51,14 @@ export async function codexAsk(prompt: string): Promise<TmResult> {
     })
     const outcome = await runTurn(client, resp.thread.id, prompt, { wait: true, cwd: null })
     if (outcome === null) return die(`codex ask on '${borrowedName}' did not return a turn`)
-    touchLastSeen(borrowedName)
+    // Deliberately do NOT advance the teammate's `last-seen`. It is the
+    // watermark `tm wait`'s backfill uses ("turns whose completedAt <= last-seen
+    // were already collected") and that backfill only ever reads the teammate's
+    // MAIN thread. This ask ran on a throwaway ephemeral thread, so bumping the
+    // shared watermark to now would make `tm wait` skip a still-uncollected main
+    // turn that finished before this ask — only collecting the main thread
+    // (`codexSend` / `codexWait`) or seeding its baseline on `codexResume` may
+    // advance it.
     return {
       code: 0,
       stdout: JSON.stringify(outcome.completed, null, 2) + '\n',

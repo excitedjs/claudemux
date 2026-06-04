@@ -13,7 +13,9 @@ import {
   existsSync,
   mkdtempSync,
   openSync,
+  readFileSync,
   rmSync,
+  writeFileSync,
   writeSync,
 } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -39,6 +41,7 @@ import { reapDaemon } from '../src/engines/codex/supervisor'
 import {
   CodexTeammateRecord,
   codexBorrowLockFile,
+  codexLastSeenFile,
   codexTeammateDir,
   removeBaseRecord,
   writeBaseRecord,
@@ -244,6 +247,26 @@ describe.skip('codexAsk — pool borrow semantics', () => {
  * exact sequence the daemon emits, and the collector's resolved Turn is
  * checked field by field.
  */
+describe('codexAsk — does not pollute the main-thread last-seen watermark', () => {
+  test('a successful ephemeral ask leaves the teammate last-seen unchanged', async () => {
+    const name = nameUnder()
+    toReap.push(name)
+    await codexSpawn(name)
+
+    // Seed an old watermark, as if the dispatcher last collected a main turn a
+    // while ago. A still-uncollected main turn that finished AFTER this value
+    // must remain recoverable by `tm wait`; bumping the watermark to now would
+    // hide it.
+    const seenPath = codexLastSeenFile(name)
+    writeFileSync(seenPath, '1000\n')
+
+    const result = await codexAsk('hello?')
+    expect(result.code).toBe(0)
+    // The fix: the ephemeral ask must NOT advance the shared watermark.
+    expect(readFileSync(seenPath, 'utf8')).toBe('1000\n')
+  })
+})
+
 describe('subscribeTurnCollection — turn/item stream merge', () => {
   function makeFakeClient(): {
     client: CodexWsClient

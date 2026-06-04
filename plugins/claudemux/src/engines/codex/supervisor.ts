@@ -644,7 +644,13 @@ export async function reapDaemon(name: string): Promise<void> {
   removeSelfRegistry(name)
 }
 
-/** Touch `last-seen` for `name` — call after a successful RPC. */
+/**
+ * Advance `name`'s `last-seen` watermark to now. Call ONLY after collecting (or
+ * resume-seeding) the teammate's MAIN thread — `tm wait`'s backfill treats main
+ * turns with `completedAt <= last-seen` as already seen. A successful RPC alone
+ * is not enough: an ephemeral `tm ask` turn must not touch this, or it would
+ * hide a still-uncollected main turn that finished before the ask.
+ */
 export function touchLastSeen(name: string): void {
   writeFileSync(codexLastSeenFile(name), `${nowSec()}\n`)
 }
